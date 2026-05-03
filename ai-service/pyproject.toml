@@ -1,0 +1,38 @@
+[project]
+name = "credit-scoring-ai-service"
+version = "2.0"
+description = "Champion LR + Challenger XGBoost credit risk scoring with SHAP explainable AI"
+requires-python = ">=3.10"
+dependencies = [
+    "xgboost>=2.1.0,<3.0.0",
+    "shap>=0.45.0,<1.0.0",
+    "scikit-learn>=1.4.0,<1.7.0",
+    "joblib>=1.4.0,<2.0.0",
+    "fastapi>=0.110.0,<0.130.0",
+    "uvicorn[standard]>=0.29.0,<1.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "pydantic-settings>=2.3.0,<3.0.0",
+    "pandas>=2.2.0,<3.0.0",
+    "numpy>=1.26.0,<3.0.0",
+    "python-json-logger>=2.0.7,<3.0.0",
+    "httpx>=0.27.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0,<9.0.0",
+    "pytest-asyncio>=0.23.0,<1.0.0",
+    "httpx>=0.27.0,<1.0.0",   # for TestClient
+]
+
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

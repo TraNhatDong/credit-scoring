@@ -69,7 +69,7 @@ class ScoringService:
     def __init__(self, models_dir: str = "/app/models"):
         self._models_dir:    Path = Path(models_dir)
         self._models:       dict[str, dict[str, Any]] = {}
-        self._preprocessors: dict[str, Preprocessor] = {}
+        self._preprocessors: dict[str, Any] = {}        # key → Preprocessor instance
         self._shap_exp:     dict[str, shap.Explainer] = {}
         self._metadata:     dict[str, Any] = {}
         self._loaded = False
@@ -179,7 +179,7 @@ class ScoringService:
             model_type = data.get("model_type", "tree")
             feature_order = data.get("feature_order", None)
 
-            raw_prob, calibrated_prob = self._predict_core(req, data, model_type, feature_order)
+            raw_prob, calibrated_prob = self._predict_core(req, data, model_type, feature_order, best_key)
             explainer = self._shap_exp[best_key]
             shap_exp, _ = self._call_shap_explainer(
                 explainer, req, data, model_type, calibrated_prob=calibrated_prob,
@@ -250,7 +250,7 @@ class ScoringService:
             metrics       = data.get("metrics", {})
             auc           = metrics.get("auc", 0.5)
 
-            _, prob = self._predict_core(req, data, model_type, feature_order)
+            _, prob = self._predict_core(req, data, model_type, feature_order, key)
 
             threshold = data.get("threshold",
                                 data.get("metrics", {}).get("final_threshold", 0.5))
@@ -310,24 +310,22 @@ class ScoringService:
         data: dict[str, Any],
         model_type: str,
         feature_order: list[str] | None,
+        model_key: str,
     ) -> tuple[float, float]:
         """
         Core inference — identical pipeline to _wrapper._predict_core.
 
         Steps:
           1. Preprocessor.transform()   — impute → engineer → clip
-          2. Reindex to feature_order    — column order matches training
+          2. Reindex to feature_order  — column order matches training
           3. dtype float32 (tree) / float64 (linear)
-          4. Feature selection for LR
+          4. Feature selection for LR (champion only)
           5. model.predict_proba()
           6. calibrator.predict()
           7. NaN guard + range validation
         """
         # ── Step 1: Full preprocessing via bundled Preprocessor ─────────────────
-        preprocessor = self._preprocessors.get(
-            next((k for k, d in self._models.items() if d is data), None),
-            None,
-        )
+        preprocessor = self._preprocessors.get(model_key)
 
         if preprocessor is not None:
             df = pd.DataFrame([req.model_dump()])
