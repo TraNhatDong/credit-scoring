@@ -11,6 +11,6 @@ Used by:
   - run_pipeline.py  : from ._transform import Preprocessor
   - _wrapper.py      : from ._transform import Preprocessor
 """
-from app.core.preprocessor import Preprocessor
+from ..core.preprocessor import Preprocessor
 
 __all__ = ["Preprocessor"]

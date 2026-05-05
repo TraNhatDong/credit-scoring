@@ -92,14 +92,20 @@ def main() -> None:
     log.info("")
     log.info("=" * 72)
     log.info("  PIPELINE COMPLETE — %s (total: %.1fs)", MODEL_VERSION, total)
-    log.info("  Champion (LR)   Test AUC : %.4f | OOF AUC : %.4f | calib: %s",
-             results_lr["metrics"]["auc"],
-             results_lr["metrics"]["oof_auc"],
-             results_lr["calibration_method"])
-    log.info("  Challenger (XGB) Test AUC: %.4f | OOF AUC: %.4f | calib: %s",
-             results_xgb["metrics"]["auc"],
-             results_xgb["metrics"]["oof_auc"],
-             results_xgb["calibration_method"])
+    champion_key = best_key
+    challenger_key = "xgb" if best_key == "lr" else "lr"
+    champ_name = models_dict[champion_key]["model_name"]
+    chal_name = models_dict[challenger_key]["model_name"]
+    log.info("  Champion (%s)   Test AUC : %.4f | OOF AUC : %.4f | calib: %s",
+             champ_name,
+             models_dict[champion_key]["metrics"]["auc"],
+             models_dict[champion_key]["metrics"]["oof_auc"],
+             models_dict[champion_key]["calibration_method"])
+    log.info("  Challenger (%s) Test AUC: %.4f | OOF AUC: %.4f | calib: %s",
+             chal_name,
+             models_dict[challenger_key]["metrics"]["auc"],
+             models_dict[challenger_key]["metrics"]["oof_auc"],
+             models_dict[challenger_key]["calibration_method"])
     log.info("  Best model: %s", best_model_name)
     log.info("  PSI-DEV (LR) : %.4f | PSI-Test (LR) : %.4f",
              results_lr["metrics"].get("psi_dev", "N/A"),

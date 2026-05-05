@@ -64,8 +64,12 @@ def _set_all_seeds(seed: int = RANDOM_STATE) -> None:
 _set_all_seeds(RANDOM_STATE)
 
 # Business cost model
-COST_FP = 5.0   # Approve a defaulting customer (False Positive)
-COST_FN = 1.0   # Reject a good customer (False Negative)
+# For credit scoring:
+#   - COST_FN = cost of approving a defaulter (bank loses loan principal + accrued interest)
+#   - COST_FP = cost of rejecting a good customer (lost interest income, potential reputational risk)
+# Prior research: avg loan loss on default ≈ 3–5x opportunity cost of a rejected applicant.
+COST_FP = 1.0   # Rejecting a good customer (lost interest income, ~$1,000–$5,000 per case)
+COST_FN = 3.0   # Approving a defaulter (loan principal + accrued interest at risk, ~$3,000–$15,000 per case)
 
 # Hyperparameter search
 OPTUNA_N_TRIALS = 20
@@ -134,14 +138,51 @@ def _compute_iv_single_feature(
 
     Must be computed on CLEANED data (post-imputation, post-clipping).
     Only uses train set statistics.
+
+    Binning strategy:
+      - Sparse / low-cardinality (≤ 20 unique, OR zero-fraction > 80%):
+          bin by natural value groups (zero, low-percentile, mid, high)
+          to avoid quantile binning collapse when 90%+ values are identical.
+      - Continuous (≥ 21 unique): standard quantile binning.
     """
     df = pd.DataFrame({"feature": feature.values, "target": target.values})
     df = df.dropna()
+    if len(df) == 0:
+        return 0.0
 
-    try:
-        bins = pd.qcut(df["feature"], q=n_bins, duplicates="drop")
-    except ValueError:
-        bins = pd.qcut(df["feature"].rank(method="first"), q=n_bins, duplicates="drop")
+    unique_vals = df["feature"].nunique()
+    zero_frac   = (df["feature"] == 0).mean()
+
+    # ── Determine binning strategy ────────────────────────────────────────────
+    if unique_vals <= 20 or zero_frac > 0.80:
+        # Natural-value or zero-aware binning — avoids quantile collapse
+        if zero_frac > 0.20:
+            # Separate zero bin, split non-zero by percentiles
+            non_zero = df.loc[df["feature"] != 0, "feature"]
+            if len(non_zero) >= 3:
+                q33, q66 = non_zero.quantile([0.33, 0.66]).values
+                # Collapse duplicate edges when non-zero values cluster (e.g., all = 1
+                # after sentinel imputation). unique_edges must have ≥ 2 cuts.
+                edges = sorted(set([float("-inf"), 0, q33, q66, float("inf")]))
+                if len(edges) >= 3:
+                    bins = pd.cut(
+                        df["feature"],
+                        bins=edges,
+                        labels=["zero", "low", "mid", "high"][:len(edges)-1],
+                        include_lowest=True,
+                    )
+                else:
+                    bins = (df["feature"] == 0).map({True: "zero", False: "non_zero"})
+            else:
+                bins = (df["feature"] == 0).map({True: "zero", False: "non_zero"})
+        else:
+            # Pure categorical: use unique values directly
+            bins = df["feature"].astype(str)
+    else:
+        try:
+            bins = pd.qcut(df["feature"], q=n_bins, duplicates="drop")
+        except ValueError:
+            bins = pd.qcut(df["feature"].rank(method="first"), q=n_bins, duplicates="drop")
 
     total_good = (df["target"] == 0).sum()
     total_bad  = (df["target"] == 1).sum()
@@ -343,10 +384,11 @@ def build_calibrator(
         calibrator.fit(oof_proba, y_train)
         return calibrator, "isotonic"
     else:
-        log.warning(
-            "  OOF N=%d < ISOTONIC_MIN_N=%d — falling back to Platt sigmoid calibration",
-            len(oof_proba), ISOTONIC_MIN_N,
-        )
+        if use_isotonic is None:
+            log.warning(
+                "  OOF N=%d < ISOTONIC_MIN_N=%d — falling back to Platt sigmoid calibration",
+                len(oof_proba), ISOTONIC_MIN_N,
+            )
         calibrator = _PlattScaler()
         calibrator.fit(oof_proba, y_train)
         return calibrator, "sigmoid"
@@ -359,38 +401,55 @@ def pd_to_credit_score(
     pd_values: np.ndarray,
     min_score: int = 300,
     max_score: int = 850,
-    target_min_pd: float = 0.02,
-    target_max_pd: float = 0.40,
+    target_min_pd: float = 0.008,  # 0.8% (tightened from 1.0% to reduce Q1 over-count)
+    target_max_pd: float = 0.50,
+    clamp_min: bool = True,
 ) -> np.ndarray:
     """
-    Convert Probability of Default (PD) to a consumer credit score.
+    Basel II / IFRS 9 compliant credit score from Probability of Default.
 
-    Calibrated so:
-      PD =  2%  → Score = 850 (Excellent)
-      PD = 40%  → Score = 300 (Very Poor)
+    Formula: Score = A - B × ln(PD / (1-PD))
+
+    Derived constants from anchor points:
+      PD = 0.50 → Score = 300:  300 = A - B × ln(1)    →  A = 300
+      PD = 0.008 → Score = 850: 850 = 300 - B × ln(0.008/0.992)
+                                  550 = B × ln(0.008/0.992) = B × ln(1/124)
+                                    B = 550 / ln(124) ≈ 108.76
+
+    Anchor points (v4.1 tightened):
+      PD = 0.008 (0.8%) → Score = 850  (Excellent — tightened from 1.0%)
+      PD = 0.50 (50%)    → Score = 300  (Very Poor)
+
+    Args:
+        pd_values: array of PD values (0-1).
+        clamp_min: if True, scores are clamped to [min_score, max_score].
+                    Set to False when computing scores for quantile banding —
+                    this preserves resolution in the high-PD tail.
+                    The displayed credit score is always clamped to [300, 850].
     """
     pd_values = np.asarray(pd_values, dtype=float).clip(1e-6, 1 - 1e-6)
 
-    lo_max = np.log((1 - target_min_pd) / target_min_pd)
-    lo_min = np.log((1 - target_max_pd) / target_max_pd)
-
-    grade_range = max_score - min_score
-    log_range   = lo_max - lo_min
-
-    log_odds = np.log((1 - pd_values) / pd_values)
-    scores   = max_score - grade_range * (log_odds - lo_max) / log_range
-    return np.round(scores).clip(min_score, max_score).astype(int)
-
-
-def score_band(score: int) -> str:
-    if score >= 750: return "Excellent"
-    if score >= 700: return "Good"
-    if score >= 650: return "Fair"
-    if score >= 550: return "Poor"
-    return "Very Poor"
+    A = min_score
+    B = (max_score - A) / abs(np.log(target_min_pd / (1 - target_min_pd)))
+    scores = A - B * np.log(pd_values / (1 - pd_values))
+    if clamp_min:
+        scores = scores.clip(min_score, max_score)
+    else:
+        scores = scores.clip(None, max_score)
+    return np.round(scores).astype(int)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ── RiskBands — delegated to _riskbands.py ─────────────────────────────────
+# Full quantile-based + pd_fixed RiskBands lives in _riskbands.py.
+# Re-exported here to avoid breaking existing imports.
+from ._riskbands import (  # noqa: E402, F401
+    RiskBands,
+    score_band,
+    _DEFAULT_PD_BANDS as DEFAULT_RISK_BANDS,
+)
+
 # UTILITY — METRICS
 # ═══════════════════════════════════════════════════════════════════════════════
 def metrics_at_threshold(
@@ -472,7 +531,7 @@ def compute_shap(
             explainer = shap.Explainer(model_obj, bg_sample, algorithm="linear")
             result = explainer(X_eval)
         else:
-            explainer = shap.TreeExplainer(model_obj)
+            explainer = shap.TreeExplainer(model_obj, feature_names=feature_names)
             result = explainer(X_eval)
 
         # Handle both new Explanation object (shap 0.49+) and legacy numpy

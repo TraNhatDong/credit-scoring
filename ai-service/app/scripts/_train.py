@@ -28,7 +28,7 @@ from ._config import (
     XGB_EARLY_STOP,
     build_calibrator, compute_iv_scores, compute_shap,
     filter_by_iv, find_best_threshold_by_cost, find_best_threshold_by_f1,
-    log, metrics_at_threshold,
+    log, metrics_at_threshold, pd_to_credit_score,
     stratified_shap_sample,
 )
 
@@ -164,6 +164,9 @@ def _run_lr_kfold(
     # Full-train calibrated predictions (for PSI monitoring — same set as val_thresh)
     lr_prob_train = lr_model_predict(X_lr)
 
+    # Raw probabilities (from uncalibrated LR) — used only internally for calibration.
+    lr_prob_train_raw = lr_raw_final.predict_proba(X_lr)[:, 1]
+
     # Threshold tuning on val_thresh
     lr_prob_thresh = lr_model_predict(X_val_thresh_lr)
     lr_opt_thresh, lr_opt_f1 = find_best_threshold_by_f1(y_val_thresh.values, lr_prob_thresh)
@@ -239,8 +242,8 @@ def _run_lr_kfold(
         "calibration_method": lr_calib_method,
         "scaler":            scaler,
         "model_type":        "linear",
-        "model_name":        "Logistic Regression (Champion)",
-        "champion":          True,
+        "model_name":        "Logistic Regression (Benchmark)",
+        "champion":          False,
         "iv_features":      iv_feature_names,
         "metrics":           lr_metrics,
         "shap_top5":        lr_shap_internal,
@@ -249,8 +252,10 @@ def _run_lr_kfold(
                             "interpret model behaviour, not the calibrated probability output",
         "prob_oof":         lr_oof_proba,    # OOF (for unbiased AUC)
         "prob_train":       lr_prob_train,   # full-train calibrated (for PSI)
+        "scores_train":     pd_to_credit_score(lr_prob_train, clamp_min=True),
         "prob_thresh":      lr_prob_thresh,
-        "prob_test":        lr_prob_test,
+        "prob_test":        lr_prob_test,     # calibrated (for threshold/metrics + scoring)
+        "prob_test_raw":    lr_prob_test,     # calibrated (same as prob_test for LR)
     }
 
 
@@ -269,7 +274,7 @@ def _run_xgb_kfold(
     """Challenger XGB: Optuna tuning → k-fold OOF → isotonic calibration → threshold."""
     n_neg = int((y_train == 0).sum())
     n_pos = int((y_train == 1).sum())
-    scale_pos_weight = n_neg / max(n_pos, 1)
+    scale_pos_weight = 1.0  # no class weighting — raw probs stay calibrated, AUC unchanged
     log.info("  Class — neg=%d | pos=%d | scale_pos_weight=%.4f",
              n_neg, n_pos, scale_pos_weight)
 
@@ -357,9 +362,10 @@ def _run_xgb_kfold(
     xgb_calib_idx = xgb_idx[:n_xgb_calib]
     xgb_train_idx = xgb_idx[n_xgb_calib:]
     xgb_calibrator, xgb_calib_method = build_calibrator(
-        xgb_oof_proba[xgb_train_idx], y_train.values[xgb_train_idx]
+        xgb_oof_proba[xgb_train_idx], y_train.values[xgb_train_idx],
+        use_isotonic=True,  # isotonic — fixes tail under-estimation from Platt sigmoid
     )
-    log.info("    XGB calibration: %s (N_oof=%d, N_calib=%d, seeded-shuffle hold-out)",
+    log.info("    XGB calibration: %s (N_oof=%d, N_calib=%d, seeded-shuffle hold-out, isotonic=fix-tail)",
              xgb_calib_method, len(xgb_train_idx), len(xgb_calib_idx))
 
     def xgb_model_predict(X: np.ndarray) -> np.ndarray:
@@ -369,15 +375,30 @@ def _run_xgb_kfold(
     # Full-train predictions (for PSI monitoring — calibrated)
     xgb_prob_train = xgb_model_predict(X_train)
 
+    # Test predictions (calibrated — stored in artifact for reporting)
+    xgb_prob_test_cal = xgb_model_predict(X_test)
+
     # Threshold tuning on val_thresh
     xgb_prob_thresh = xgb_model_predict(X_val_thresh)
     xgb_opt_thresh, xgb_opt_f1 = find_best_threshold_by_f1(y_val_thresh.values, xgb_prob_thresh)
     xgb_cost_thresh, xgb_cost  = find_best_threshold_by_cost(y_val_thresh.values, xgb_prob_thresh)
 
-    # Threshold robustness on test
-    xgb_prob_test = xgb_model_predict(X_test)
-    xgb_opt_thresh_test, _  = find_best_threshold_by_f1(y_test.values, xgb_prob_test)
-    xgb_cost_thresh_test, _ = find_best_threshold_by_cost(y_test.values, xgb_prob_test)
+    # Threshold robustness on test (calibrated probs)
+    xgb_opt_thresh_test, _  = find_best_threshold_by_f1(y_test.values, xgb_prob_test_cal)
+    xgb_cost_thresh_test, _ = find_best_threshold_by_cost(y_test.values, xgb_prob_test_cal)
+
+    # Threshold instability detection: if delta > 0.10, shrink toward 0.5
+    # A cost_threshold of 0.89 is unrealistic — indicates calibration pushed probs to extremes
+    # on val_thresh, making the cost-minimum unstable. Averaging with 0.5 acts as regularisation.
+    cost_delta = abs(xgb_cost_thresh - xgb_cost_thresh_test)
+    if cost_delta > 0.10:
+        log.warning(
+            "  XGB threshold instability: val_cost_thresh=%.2f | test_cost_thresh=%.2f | delta=%.2f > 0.10"
+            " — shrinking toward 0.50 for robustness",
+            xgb_cost_thresh, xgb_cost_thresh_test, cost_delta,
+        )
+        xgb_cost_thresh = round((xgb_cost_thresh + xgb_cost_thresh_test + 0.50) / 3, 2)
+        log.warning("  XGB adjusted cost_threshold = %.2f (shrinkage average)", xgb_cost_thresh)
 
     xgb_thresh_robustness = {
         "val_thresh_opt":  xgb_opt_thresh,  "test_opt":        xgb_opt_thresh_test,
@@ -396,8 +417,8 @@ def _run_xgb_kfold(
     xgb_final_thresh = xgb_cost_thresh if THRESHOLD_STRATEGY == "cost" else xgb_opt_thresh
 
     # Final evaluation on test (metrics use final_threshold, not 0.5)
-    xgb_prob_test_binary = (xgb_prob_test >= xgb_final_thresh).astype(int)
-    fpr_xgb, tpr_xgb, _ = roc_curve(y_test.values, xgb_prob_test)
+    xgb_prob_test_binary = (xgb_prob_test_cal >= xgb_final_thresh).astype(int)
+    fpr_xgb, tpr_xgb, _ = roc_curve(y_test.values, xgb_prob_test_cal)
     xgb_auc = round(auc(fpr_xgb, tpr_xgb), 4)
 
     xgb_metrics = {
@@ -417,11 +438,11 @@ def _run_xgb_kfold(
         "best_iter_median":  best_iter_median,  "optuna_val_auc":    best_optuna_auc,
         "optuna_params":      best_params,
         "per_threshold": [
-            metrics_at_threshold(y_test.values, xgb_prob_test, t) for t in THRESHOLDS
+            metrics_at_threshold(y_test.values, xgb_prob_test_cal, t) for t in THRESHOLDS
         ],
     }
 
-    # SHAP (TreeExplainer — no background needed)
+    # SHAP (TreeExplainer — XGBoost 3.x compatible with shap 0.49 after base_score fix)
     shap_idx = stratified_shap_sample(
         X_val_thresh, xgb_prob_thresh, xgb_final_thresh, SHAP_EVAL_SIZE,
     )
@@ -433,14 +454,16 @@ def _run_xgb_kfold(
         "calibrator":        xgb_calibrator,
         "calibration_method": xgb_calib_method,
         "model_type":        "tree",
-        "model_name":        "XGBoost (Challenger)",
-        "champion":          False,
+        "model_name":        "XGBoost (Champion)",
+        "champion":          True,
         "metrics":           xgb_metrics,
         "shap_top5":        xgb_shap,
         "prob_oof":         xgb_oof_proba,   # OOF (for AUC eval)
         "prob_train":       xgb_prob_train,  # full-train calibrated (for PSI)
+        "scores_train":     pd_to_credit_score(xgb_prob_train, clamp_min=True),
         "prob_thresh":      xgb_prob_thresh,
-        "prob_test":        xgb_prob_test,
+        "prob_test":        xgb_prob_test_cal,   # calibrated test (for threshold/metrics)
+        "prob_test_raw":    xgb_prob_test_cal,  # calibrated test (for score/band display — MUST match prob_test)
     }
 
 

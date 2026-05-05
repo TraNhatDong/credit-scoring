@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from ._config import (
-    log, pd_to_credit_score, score_band,
+    log, pd_to_credit_score, RiskBands,
     RAW_FEATURE_COLUMNS,
 )
 from ._transform import Preprocessor
@@ -65,6 +65,30 @@ class CreditScoringModel:
         self.model_version = artifact.get("model_version", "unknown")
         self.scaler       = artifact.get("scaler", None)
         self.threshold    = artifact.get("threshold", 0.5)
+        # Training scores for quantile banding — fitted RiskBands are deterministic
+        # from the training distribution; no leakage risk since scores are predictions.
+        self._scores_train = artifact.get("scores_train", None)
+        self._risk_bands: "RiskBands | None" = None
+
+    def get_risk_bands(self) -> "RiskBands":
+        """
+        Lazily fit quantile-based RiskBands from training score distribution.
+
+        Band boundaries are fixed at fit time and never change during inference.
+        Single authoritative banding system: no PD thresholds, no legacy PD-fixed bands.
+        """
+        if self._risk_bands is None:
+            if self._scores_train is not None and len(self._scores_train) > 0:
+                self._risk_bands = RiskBands.fit(
+                    np.asarray(self._scores_train, dtype=float), n_bands=7
+                )
+            else:
+                log.warning(
+                    "scores_train not in artifact — cannot fit quantile RiskBands. "
+                    "Falling back to score in [300, 850]."
+                )
+                self._risk_bands = None
+        return self._risk_bands
 
     @classmethod
     def load(cls, model_path: str) -> "CreditScoringModel":
@@ -179,7 +203,15 @@ class CreditScoringModel:
         # Step 8: Threshold and credit score
         prediction = (pd_calibrated >= self.threshold).astype(int)
         scores = pd_to_credit_score(pd_calibrated)
-        bands  = [score_band(int(s)) for s in scores]
+
+        bands = []
+        risk_bands = self.get_risk_bands()
+        for s in scores:
+            if risk_bands is not None:
+                bands.append(risk_bands.get_band(int(s)))
+            else:
+                # Final safety fallback: score clipped to [300, 850] by pd_to_credit_score
+                bands.append(str(int(s)))
 
         log.debug(
             "Inference: model=%s | n_samples=%d | mean_pd_raw=%.4f | mean_pd_cal=%.4f | "

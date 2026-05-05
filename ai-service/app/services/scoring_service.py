@@ -40,10 +40,12 @@ from app.models.schemas import (
 
 logger = logging.getLogger("credit-ai-service.scoring")
 
-# Pipeline model keys (must match run_pipeline.py step 6 naming)
+# Pipeline model keys — matched to actual artifact filenames saved by run_pipeline.py:
+#   champion_xgb_model.{version}.pkl  → champion (best AUC)
+#   benchmark_lr_model.{version}.pkl   → challenger (benchmark)
 _MODEL_KEYS = [
-    "champion_lr",
-    "challenger_xgb",
+    "champion_xgb",
+    "benchmark_lr",
 ]
 
 
@@ -161,8 +163,8 @@ class ScoringService:
         """
         t0 = time.perf_counter()
 
-        # Map pipeline key (lr/xgb) → service key (champion_lr/challenger_xgb)
-        _KEY_MAP = {"lr": "champion_lr", "xgb": "challenger_xgb"}
+        # Map pipeline key (xgb/lr) → service key (champion_xgb/benchmark_lr)
+        _KEY_MAP = {"xgb": "champion_xgb", "lr": "benchmark_lr"}
 
         raw_best_key = self._metadata.get("best_model_key", None)
         best_key = _KEY_MAP.get(raw_best_key) if raw_best_key else None

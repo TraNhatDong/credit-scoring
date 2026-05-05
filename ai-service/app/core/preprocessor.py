@@ -111,8 +111,29 @@ class Preprocessor:
         Impute original features BEFORE engineering.
 
         NumberOfDependents → 0; all other numeric columns → median.
+
+        Special values 96/98 in late-payment columns are sentinel codes
+        (observed in the GiveMeSomeCredit dataset — likely data-entry errors
+        or system placeholders). They appear simultaneously in all three
+        columns (264 rows) and have a bad_rate of 54% — the risk signal is
+        real but the value 96/98 is erroneous. Clipping to 15 preserves
+        the high-risk nature without distorting the scale.
         """
         X["NumberOfDependents"] = X["NumberOfDependents"].fillna(0)
+
+        # Clip sentinel codes 96/98 to a reasonable maximum (15).
+        # The 264 sentinel rows have bad_rate=54%, indicating genuine high risk.
+        # Replacing with 0 (imputation) would erase the risk signal entirely.
+        # Clipping to 15 keeps the extreme-but-valid signal.
+        _SENTINEL_MAX = 15
+        for col in (
+            "NumberOfTime30-59DaysPastDueNotWorse",
+            "NumberOfTime60-89DaysPastDueNotWorse",
+            "NumberOfTimes90DaysLate",
+        ):
+            if col in X.columns:
+                X.loc[X[col].isin({96, 98}), col] = float(_SENTINEL_MAX)
+
         for col, median_val in self.median_values.items():
             if col != "NumberOfDependents":
                 X[col] = X[col].fillna(median_val)

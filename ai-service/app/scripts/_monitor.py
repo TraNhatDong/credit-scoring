@@ -22,10 +22,192 @@ import pandas as pd
 from ._config import (
     COST_FP, COST_FN, ISOTONIC_MIN_N, MODEL_VERSION, N_SPLITS,
     THRESHOLD_STRATEGY, THRESHOLDS,
+    RiskBands,
     compute_bad_rate_drift, compute_ks_statistic, compute_psi,
-    compute_psi_bin_edges, log, pd_to_credit_score, psi_band, score_band,
+    compute_psi_bin_edges, log, pd_to_credit_score, psi_band,
     RAW_FEATURE_COLUMNS,
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 8b - CALIBRATION SANITY CHECKS (Buoc 1 + Buoc 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+def _compute_calibration_check(
+    y_test: np.ndarray,
+    prob_test: np.ndarray,
+    score_test: np.ndarray,
+    q_bands: "RiskBands",
+    model_name: str,
+) -> dict[str, Any]:
+    """
+    Bước 1: Check real bad_rate in Q1.
+    Bước 4: Inspect PD/score distribution for spikes, clusters, plateaus.
+
+    Returns a diagnostics dict for logging and report.
+    """
+    import numpy as np
+
+    # ── Bước 1: bad_rate in Q1 ──────────────────────────────────────────────
+    # RiskBands labels: "Q1 (Best)" = PD <= 1.0% (score >= q1_ceiling approx 833)
+    # (NOT "Q1 (Excellent)" - correct label from _riskbands.py)
+    Q1_label = "Q1 (Best)"
+    Q1_mask = np.array([q_bands.get_band(int(s)) == Q1_label for s in score_test])
+    n_Q1 = int(Q1_mask.sum())
+    bad_rate_Q1 = float(y_test[Q1_mask].mean()) if n_Q1 > 0 else None
+
+    # Interpret bad_rate_Q1 (Q1 = PD <= 1.0%)
+    if bad_rate_Q1 is not None:
+        if bad_rate_Q1 <= 0.010:
+            br_diag = "GOOD (<= 1.0%) - Q1 PD <= 1% calibration accurate"
+        elif bad_rate_Q1 <= 0.015:
+            br_diag = "CAUTION (1-1.5%) - model slightly under-estimates Q1 risk"
+        elif bad_rate_Q1 <= 0.020:
+            br_diag = "CAUTION (1.5-2%) - model under-estimates Q1 risk"
+        else:
+            br_diag = "BAD (> 2%) - model significantly under-estimates Q1 risk"
+    else:
+        br_diag = "N/A - no Q1 samples in test set"
+
+    # ── Bước 4a: PD distribution check ───────────────────────────────────────
+    pd_vals = np.asarray(prob_test)
+    pd_p01  = float(np.percentile(pd_vals, 1))
+    pd_p99  = float(np.percentile(pd_vals, 99))
+    pd_skew = float(np.mean((pd_vals - pd_vals.mean()) ** 3) / (np.std(pd_vals) ** 3 + 1e-12))
+    pd_spike = bool(np.std(pd_vals) < 0.02)   # near-zero std = spike/collapse
+
+    # Count PD clusters (bins of 0.01 width)
+    pd_bins = np.digitize(pd_vals, np.arange(0, 1.01, 0.01))
+    bin_counts = np.bincount(pd_bins[pd_bins > 0], minlength=101)
+    top_bin_pct = float(bin_counts.max() / len(pd_vals) * 100) if len(pd_vals) > 0 else 0.0
+    pd_cluster_flag = top_bin_pct > 20.0   # >20% in a single 1% bin = suspicious cluster
+
+    # ── Bước 4b: Score distribution check ────────────────────────────────────
+    score_vals = np.asarray(score_test, dtype=int)
+    score_range = int(score_vals.max() - score_vals.min())
+
+    # ── Bước 4c: Tail PD check ───────────────────────────────────────────────
+    tail_mask = prob_test >= 0.15
+    bad_rate_tail = float(y_test[tail_mask].mean()) if tail_mask.sum() > 0 else None
+
+    diagnostics = {
+        "bad_rate_Q1":        bad_rate_Q1,
+        "n_Q1":              n_Q1,
+        "bad_rate_Q1_diag":   br_diag,
+        "pd_min":             float(pd_vals.min()),
+        "pd_max":             float(pd_vals.max()),
+        "pd_mean":            float(pd_vals.mean()),
+        "pd_p01":             pd_p01,
+        "pd_p99":             pd_p99,
+        "pd_skew":            pd_skew,
+        "pd_spike":           pd_spike,
+        "pd_cluster_flag":    pd_cluster_flag,
+        "top_bin_pct":        round(top_bin_pct, 2),
+        "score_range":        score_range,
+        "score_min":          int(score_vals.min()),
+        "score_max":          int(score_vals.max()),
+        "n_tail_samples":      int(tail_mask.sum()),
+        "bad_rate_tail":      bad_rate_tail,
+    }
+
+    log.info(
+        "  %-20s Q1 bad_rate=%.4f (%s) | Q1_n=%d | "
+        "pd_mean=%.4f pd_p01=%.4f pd_p99=%.4f | skew=%.3f | spike=%s cluster=%s",
+        model_name + ":",
+        bad_rate_Q1 if bad_rate_Q1 is not None else -1,
+        br_diag,
+        n_Q1,
+        diagnostics["pd_mean"],
+        pd_p01, pd_p99,
+        pd_skew,
+        pd_spike,
+        pd_cluster_flag,
+    )
+    if bad_rate_Q1 is not None and bad_rate_Q1 > 0.020:
+        log.warning("  WARNING: Q1 calibration: real bad_rate=%.4f exceeds 2.0%% -- model under-estimates Q1 risk", bad_rate_Q1)
+    if pd_spike:
+        log.warning("  WARNING: PD distribution spike detected (std=%.4f) -- model may be near-collapsed", np.std(pd_vals))
+    if pd_cluster_flag:
+        log.warning("  WARNING: PD cluster detected: %.1f%% of predictions in single 1%% bin -- check isotonic calibration", top_bin_pct)
+
+    return diagnostics
+
+
+def _plot_score_distributions(
+    results_lr: dict,
+    results_xgb: dict,
+    y_test: np.ndarray,
+    out_dir: str = "models",
+) -> None:
+    """
+    Bước 4: Save diagnostic histograms (PD + Score) as PNG to out_dir.
+    Four subplots per model: PD histogram, Score histogram, PD by true label, Score by true label.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        log.warning("  matplotlib not available — skipping score distribution plots: %s", exc)
+        return
+
+    for key, res in [("LR", results_lr), ("XGBoost", results_xgb)]:
+        model_name = "Logistic Regression" if key == "LR" else "XGBoost"
+        tag = "[CHAMPION]" if res["champion"] else "[BENCHMARK]"
+
+        prob_test = np.asarray(res.get("prob_test", []))
+        scores    = np.asarray(res.get("scores_train", []))   # training scores for banding
+
+        if len(prob_test) == 0:
+            continue
+
+        scores_test = pd_to_credit_score(prob_test, clamp_min=True)
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        fig.suptitle(f"Diagnostic: {model_name} {tag}", fontsize=13, fontweight="bold")
+
+        # Plot 1: PD histogram
+        axes[0, 0].hist(prob_test, bins=50, edgecolor="black", alpha=0.7, color="steelblue")
+        axes[0, 0].axvline(prob_test.mean(), color="red", linestyle="--", label=f"mean={prob_test.mean():.4f}")
+        axes[0, 0].axvline(0.01, color="orange", linestyle=":", label="PD=1% anchor")
+        axes[0, 0].set_xlabel("Calibrated PD")
+        axes[0, 0].set_ylabel("Count")
+        axes[0, 0].set_title("PD Distribution (Test)")
+        axes[0, 0].legend(fontsize=8)
+
+        # Plot 2: Score histogram
+        axes[0, 1].hist(scores_test, bins=40, edgecolor="black", alpha=0.7, color="forestgreen")
+        axes[0, 1].axvline(scores_test.mean(), color="red", linestyle="--", label=f"mean={scores_test.mean():.1f}")
+        axes[0, 1].axvline(850, color="orange", linestyle=":", label="Score=850 anchor")
+        axes[0, 1].set_xlabel("Credit Score")
+        axes[0, 1].set_ylabel("Count")
+        axes[0, 1].set_title("Credit Score Distribution (Test)")
+        axes[0, 1].legend(fontsize=8)
+
+        # Plot 3: PD by true label
+        for label_val, label_name, color in [(0, "Good (y=0)", "green"), (1, "Bad (y=1)", "red")]:
+            mask = y_test == label_val
+            if mask.sum() > 0:
+                axes[1, 0].hist(prob_test[mask], bins=40, alpha=0.6, label=label_name, color=color)
+        axes[1, 0].set_xlabel("Calibrated PD")
+        axes[1, 0].set_ylabel("Count")
+        axes[1, 0].set_title("PD by True Label (Test)")
+        axes[1, 0].legend(fontsize=8)
+
+        # Plot 4: Score by true label
+        for label_val, label_name, color in [(0, "Good (y=0)", "green"), (1, "Bad (y=1)", "red")]:
+            mask = y_test == label_val
+            if mask.sum() > 0:
+                axes[1, 1].hist(scores_test[mask], bins=40, alpha=0.6, label=label_name, color=color)
+        axes[1, 1].set_xlabel("Credit Score")
+        axes[1, 1].set_ylabel("Count")
+        axes[1, 1].set_title("Credit Score by True Label (Test)")
+        axes[1, 1].legend(fontsize=8)
+
+        plt.tight_layout()
+        out_path = os.path.join(out_dir, f"diag_score_dist_{key.lower()}.png")
+        plt.savefig(out_path, dpi=120)
+        plt.close(fig)
+        log.info("  Saved: %s", out_path)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -59,10 +241,10 @@ def step9_monitoring(
         ("LR", results_lr, prob_val_lr),
         ("XGBoost", results_xgb, prob_val_xgb),
     ]:
-        # PSI-DEV: val_thresh vs train (reference = val_thresh predictions)
+        # PSI-DEV: drift of val_thresh predictions vs train (reference = full-train calibrated)
         psi_bin_edges = compute_psi_bin_edges(prob_val, n_bins=10)
         psi_dev  = round(compute_psi(prob_val, res["prob_thresh"], bin_edges=psi_bin_edges), 4)
-        # PSI-Test: test vs val_thresh (same reference)
+        # PSI-Test: drift of test predictions vs train (reference = full-train calibrated)
         psi_test = round(compute_psi(prob_val, res["prob_test"],  bin_edges=psi_bin_edges), 4)
 
         res["metrics"]["psi_dev"]      = psi_dev
@@ -71,7 +253,7 @@ def step9_monitoring(
         res["metrics"]["psi_test_band"] = psi_band(psi_test)
 
         log.info(
-            "  %s — PSI-DEV=%.4f (%s) | PSI-Test=%.4f (%s) | bins from val_thresh",
+            "  %s — PSI-DEV=%.4f (%s) | PSI-Test=%.4f (%s) | reference=full-train calibrated",
             name, psi_dev, psi_band(psi_dev), psi_test, psi_band(psi_test),
         )
 
@@ -125,12 +307,31 @@ def step9_monitoring(
     )
     if br["flag"]:
         log.warning(
-            "  ⚠️  CLASS IMBALANCE DRIFT DETECTED: %s",
+            "  [WARNING] CLASS IMBALANCE DRIFT DETECTED: %s",
             br["flag_reason"],
         )
 
     results_lr["bad_rate"]  = br
     results_xgb["bad_rate"] = br
+
+    # ── Bước 1 + Bước 4: Calibration sanity checks ────────────────────────────
+    log.info("  Calibration diagnostics (B1 bad_rate_Q1 + B4 distribution check):")
+    for res, name in [(results_lr, "LR"), (results_xgb, "XGBoost")]:
+        prob_test = res["prob_test"]
+        scores_test = pd_to_credit_score(prob_test, clamp_min=True)
+        # Fit RiskBands from training scores for Q1 identification
+        scores_train = res.get("scores_train")
+        if scores_train is not None and len(scores_train) > 0:
+            q_bands = RiskBands.fit(np.asarray(scores_train, dtype=float), n_bands=7)
+        else:
+            q_bands = RiskBands.fit(scores_test.astype(float), n_bands=7)
+        diag = _compute_calibration_check(
+            y_test.values, prob_test, scores_test, q_bands, name,
+        )
+        res["calibration_diagnostics"] = diag
+
+    # ── Bước 4: Score distribution plots ───────────────────────────────────
+    _plot_score_distributions(results_lr, results_xgb, y_test.values, out_dir="models")
 
     log.info("  STEP 9 done in %.1fs", _time.perf_counter() - t0)
 
@@ -163,9 +364,17 @@ def step10_save_artifacts(
         {"lr": results_lr, "xgb": results_xgb}.items(),
         key=lambda kv: kv[1]["metrics"]["auc"],
     )[0]
+    is_xgb_champion = (best_key == "xgb")
 
-    # ── Champion model (LR) — single artifact bundle ───────────────────────────
-    lr_path = os.path.join(out_dir, f"champion_lr_model.{MODEL_VERSION}.pkl")
+    # ── Champion model — single artifact bundle ─────────────────────────────────
+    if is_xgb_champion:
+        champ_path = os.path.join(out_dir, f"champion_xgb_model.{MODEL_VERSION}.pkl")
+        bench_path = os.path.join(out_dir, f"benchmark_lr_model.{MODEL_VERSION}.pkl")
+    else:
+        champ_path = os.path.join(out_dir, f"champion_lr_model.{MODEL_VERSION}.pkl")
+        bench_path = os.path.join(out_dir, f"benchmark_xgb_model.{MODEL_VERSION}.pkl")
+
+    # ── LR artifact (always saved — benchmark or champion depending on AUC) ───────
     joblib.dump({
         "model":              results_lr["model"],
         "calibrator":         results_lr["calibrator"],
@@ -173,37 +382,42 @@ def step10_save_artifacts(
         "scaler":             results_lr["scaler"],
         "feature_names":      lr_feature_names,
         "feature_order":      lr_feature_names,
-        "champion":           True,
+        "champion":           not is_xgb_champion,
         "model_type":         "linear",
         "model_version":      MODEL_VERSION,
-        "preprocessor_state": preprocessor.get_state(),   # serialised — stable across version changes
+        "preprocessor_state": preprocessor.get_state(),
         "iv_threshold":       0.02,
         "iv_scores":          iv_scores,
         "threshold":          results_lr["metrics"]["final_threshold"],
         "threshold_strategy": THRESHOLD_STRATEGY,
-    }, lr_path)
-    log.info("  Saved: %s (champion_lr | %d IV features | %s)",
-             lr_path, len(lr_feature_names), results_lr["calibration_method"])
+        "scores_train":       results_lr.get("scores_train"),
+    }, champ_path if not is_xgb_champion else bench_path)
+    log.info("  Saved: %s (%s | %d IV features | %s)",
+             champ_path if not is_xgb_champion else bench_path,
+             "champion_lr" if not is_xgb_champion else "benchmark_lr",
+             len(lr_feature_names), results_lr["calibration_method"])
 
-    # ── Challenger model (XGB) — single artifact bundle ────────────────────────
-    xgb_path = os.path.join(out_dir, f"challenger_xgb_model.{MODEL_VERSION}.pkl")
+    # ── XGB artifact ───────────────────────────────────────────────────────────
     joblib.dump({
         "model":              results_xgb["model"],
         "calibrator":         results_xgb["calibrator"],
         "calibration_method": results_xgb["calibration_method"],
         "feature_names":      RAW_FEATURE_COLUMNS,
         "feature_order":      RAW_FEATURE_COLUMNS,
-        "champion":           False,
+        "champion":           is_xgb_champion,
         "model_type":         "tree",
         "model_version":      MODEL_VERSION,
-        "preprocessor_state": preprocessor.get_state(),   # serialised — same Preprocessor as LR
+        "preprocessor_state": preprocessor.get_state(),
         "iv_threshold":       0.02,
         "iv_scores":          iv_scores,
         "threshold":         results_xgb["metrics"]["final_threshold"],
         "threshold_strategy": THRESHOLD_STRATEGY,
-    }, xgb_path)
-    log.info("  Saved: %s (challenger_xgb | %d raw features | %s)",
-             xgb_path, len(RAW_FEATURE_COLUMNS), results_xgb["calibration_method"])
+        "scores_train":      results_xgb.get("scores_train"),
+    }, champ_path if is_xgb_champion else bench_path)
+    log.info("  Saved: %s (%s | %d raw features | %s)",
+             champ_path if is_xgb_champion else bench_path,
+             "champion_xgb" if is_xgb_champion else "benchmark_xgb",
+             len(RAW_FEATURE_COLUMNS), results_xgb["calibration_method"])
 
     # ── Pipeline metadata JSON ────────────────────────────────────────────────
     def _summarise(m: dict) -> dict:
@@ -225,31 +439,31 @@ def step10_save_artifacts(
         "cost_fn":              COST_FN,
         "threshold_strategy":   THRESHOLD_STRATEGY,
         "champion": {
-            "key":                "lr",
-            "model_name":         "Logistic Regression (Champion)",
-            "test_auc":            results_lr["metrics"]["auc"],
-            "oof_auc":            results_lr["metrics"]["oof_auc"],
-            "k_fold_aucs":        results_lr["metrics"].get("k_fold_aucs"),
-            "final_threshold":     results_lr["metrics"]["final_threshold"],
-            "threshold_robustness": results_lr["metrics"].get("threshold_robustness"),
-            "calibration_method": results_lr["calibration_method"],
-            "bad_rate":           results_lr.get("bad_rate"),
-            "metrics":            _summarise(results_lr["metrics"]),
-        },
-        "challenger": {
             "key":                "xgb",
-            "model_name":         "XGBoost (Challenger)",
+            "model_name":         "XGBoost (Champion)",
             "test_auc":            results_xgb["metrics"]["auc"],
             "oof_auc":            results_xgb["metrics"]["oof_auc"],
             "k_fold_aucs":        results_xgb["metrics"].get("k_fold_aucs"),
             "final_threshold":     results_xgb["metrics"]["final_threshold"],
             "threshold_robustness": results_xgb["metrics"].get("threshold_robustness"),
             "calibration_method": results_xgb["calibration_method"],
-            "optuna_params":       results_xgb["metrics"].get("optuna_params"),
-            "optuna_val_auc":     results_xgb["metrics"].get("optuna_val_auc"),
-            "best_iter_median":   results_xgb["metrics"].get("best_iter_median"),
             "bad_rate":           results_xgb.get("bad_rate"),
             "metrics":            _summarise(results_xgb["metrics"]),
+        },
+        "challenger": {
+            "key":                "lr",
+            "model_name":         "Logistic Regression (Benchmark)",
+            "test_auc":            results_lr["metrics"]["auc"],
+            "oof_auc":            results_lr["metrics"]["oof_auc"],
+            "k_fold_aucs":        results_lr["metrics"].get("k_fold_aucs"),
+            "final_threshold":     results_lr["metrics"]["final_threshold"],
+            "threshold_robustness": results_lr["metrics"].get("threshold_robustness"),
+            "calibration_method": results_lr["calibration_method"],
+            "optuna_params":       None,
+            "optuna_val_auc":     None,
+            "best_iter_median":   None,
+            "bad_rate":           results_lr.get("bad_rate"),
+            "metrics":            _summarise(results_lr["metrics"]),
         },
         "best_model_key": best_key,
         "feature_drift":  results_lr.get("feature_drift"),
@@ -316,14 +530,44 @@ def step11_generate_report(
     lines.append(f"  test  bad_rate : {br.get('bad_rate_test', 'N/A')}")
     lines.append(f"  drift          : {br.get('drift', 'N/A')}")
     flag = br.get("flag", False)
-    lines.append(f"  status         : {'⚠️  FLAGGED — drift > threshold' if flag else 'OK'}")
+    lines.append(f"  status         : {'[WARNING] FLAGGED -- drift > threshold' if flag else 'OK'}")
+    lines.append("")
+
+    # 2b. Calibration diagnostics
+    lines.append("## 2b. CALIBRATION DIAGNOSTICS (B1 bad_rate_Q1 + B4 distribution)")
+    rule()
+    lines.append("  Q1 real bad_rate check:")
+    lines.append("    <= 1.0% -> GOOD | 1.0-1.5% -> caution | 1.5-2.0% -> under-est | > 2.0% -> bad under-est")
+    lines.append("")
+    for res, name in [(results_lr, "LR"), (results_xgb, "XGBoost")]:
+        d = res.get("calibration_diagnostics", {})
+        if d:
+            tag = "[CHAMPION]" if res["champion"] else "[BENCHMARK]"
+            lines.append(f"  {name} {tag}")
+            lines.append(f"    bad_rate_Q1 = {d.get('bad_rate_Q1', 'N/A')} ({d.get('n_Q1', 0)} samples) | {d.get('bad_rate_Q1_diag', '')}")
+            lines.append(
+                f"    PD: min={d.get('pd_min', 0):.4f} max={d.get('pd_max', 0):.4f}"
+                f" mean={d.get('pd_mean', 0):.4f} p01={d.get('pd_p01', 0):.4f} p99={d.get('pd_p99', 0):.4f}"
+            )
+            lines.append(
+                f"    skew={d.get('pd_skew', 0):.3f} spike={d.get('pd_spike', False)}"
+                f" cluster={d.get('pd_cluster_flag', False)} top_bin={d.get('top_bin_pct', 0):.1f}%"
+            )
+            lines.append(
+                f"    Score: range=[{d.get('score_min', 0)},{d.get('score_max', 0)}] width={d.get('score_range', 0)}"
+            )
+            lines.append(
+                f"    Tail PD≥15%: n={d.get('n_tail_samples', 0)} bad_rate={d.get('bad_rate_tail', 'N/A')}"
+            )
+            lines.append("")
+    lines.append("  Diagnostic plots: models/diag_score_dist_lr.png | models/diag_score_dist_xgb.png")
     lines.append("")
 
     # 3. Feature spaces
     lines.append("## 3. FEATURE SPACES")
     rule()
-    lines.append(f"  CHAMPION (LR)  : {len(lr_feature_names)} IV-filtered features (IV > 0.02) + StandardScaler")
-    lines.append(f"  CHALLENGER (XGB): {len(RAW_FEATURE_COLUMNS)} raw cleaned features (no scaling, no IV filter)")
+    lines.append(f"  CHAMPION (XGB) : {len(RAW_FEATURE_COLUMNS)} raw features (no scaling, no IV filter) — best AUC by test")
+    lines.append(f"  BENCHMARK (LR) : {len(lr_feature_names)} IV-filtered features (IV > 0.02) + StandardScaler")
     lines.append("")
     lines.append("  IV scores (sorted desc):")
     for feat, iv in sorted(iv_scores.items(), key=lambda x: -x[1]):
@@ -411,22 +655,99 @@ def step11_generate_report(
         )
     lines.append("")
 
-    # 8. Credit score samples
+    # 8. Credit score samples + quantile band distribution
     lines.append("## 8. CREDIT SCORE SAMPLES (first 10 Test predictions)")
     rule()
-    lines.append("  Scale: 300–850 (300=highest risk, 850=lowest risk)")
+    lines.append("  Scale: 300–850 (Basel II log-odds)")
+    lines.append(
+        "  Band assignment: hybrid — PD-threshold tails (Q1/Q7) + quantile middle (Q2–Q6)\n"
+        "  Basel anchors: Q1 = PD <= 1.0% | Q7 = PD >= 15% | Q2-Q6 = ~16% each"
+    )
     lines.append("")
     for key, res in sorted(models.items(), key=lambda kv: -kv[1]["metrics"]["auc"]):
         mname = "Logistic Regression" if key == "lr" else "XGBoost"
         tag   = " [CHAMPION]" if res["champion"] else " [CHALLENGER]"
-        tag2  = " ← BEST" if key == best_key else ""
+        tag2  = " [BEST]" if key == best_key else ""
         lines.append(f"  {mname}{tag}{tag2}")
-        scores = pd_to_credit_score(res["prob_test"][:10])
-        lines.append(f"    {'Idx':>4}  {'PD':>8}  {'Score':>6}  {'Band':>12}")
-        lines.append("    " + "-" * 36)
-        for i, (pd_val, score) in enumerate(zip(res["prob_test"][:10], scores)):
-            lines.append(f"    {i:>4}  {pd_val:>8.4f}  {score:>6}  {score_band(int(score)):>12}")
+
+        # Use calibrated test probabilities for scoring and display.
+        # prob_display: calibrated test probs (for PD column in report).
+        prob_display = res["prob_test"]
+        # prob_test_raw: stored raw test probs for XGB (LR: same as prob_display).
+        prob_raw = res.get("prob_test_raw", prob_display)
+        scores = pd_to_credit_score(prob_raw, clamp_min=True)
+
+        # Fit hybrid bands from training scores: PD-anchored tails + quantile middle
+        if "scores_train" in res and res["scores_train"] is not None:
+            q_bands = RiskBands.fit(res["scores_train"], n_bands=7)
+            band_n = len(res["scores_train"])
+        else:
+            # Fallback: fit from test scores (initial run before retrain)
+            q_bands = RiskBands.fit(scores, n_bands=7)
+            band_n = len(scores)
+
+        # Score = calibrated prob (for Basel-compliant credit score scale)
+        # PD display = calibrated prob (for regulatory probability reporting)
+        lines.append(f"    {'Idx':>4}  {'PD':>8}  {'Score':>6}  {'Band':>16}")
+        lines.append("    " + "-" * 42)
+        for i, (pd_cal, pd_raw, score) in enumerate(zip(prob_display[:10], prob_raw[:10], scores)):
+            lines.append(
+                f"    {i:>4}  {pd_cal:>8.4f}  {score:>6}  {q_bands.get_band(int(score)):>16}"
+            )
+
+        # Per-model hybrid band distribution
+        band_stats = q_bands.band_stats(scores)
         lines.append("")
+        lines.append(
+            f"  Band Distribution — hybrid PD-tail + quantile-middle (Band Set — "
+            + str(band_n) + " samples):"
+        )
+        W = 80
+        lines.append("    " + "-" * W)
+        # Header row: Band | Count | Pct | Score Range | PD Anchor
+        lines.append(
+            "      "
+            + "Band".ljust(15)
+            + "Count".rjust(7)
+            + "Pct".rjust(8)
+            + "Score Range".rjust(16)
+            + "PD Anchor (Basel)".rjust(20)
+        )
+        lines.append("    " + "-" * W)
+        for i, label in enumerate(q_bands.labels):
+            st = band_stats.get(label, {
+                "count": 0, "pct": 0.0,
+                "score_lo": 300, "score_hi": 850, "pd_label": None,
+            })
+            lo, hi = st["score_lo"], st["score_hi"]
+
+            # Display format -- handle edge cases where adjacent thresholds collapse
+            if i == 0:
+                # Q1: [q1_ceiling, 850]
+                score_range = f"{int(round(lo))}-{int(hi)}"
+            elif i == q_bands._n_bands - 1:
+                # Q7: [300, q7_floor]
+                score_range = f"{int(lo)}-{int(round(hi))}"
+            elif int(round(lo)) == int(round(hi)):
+                # Adjacent thresholds collapsed (e.g. Q6 when span is tiny)
+                score_range = f"{int(round(lo))}-{int(round(hi))}"
+            elif lo > hi:
+                # Inverted range -- fallback to threshold
+                score_range = f"{int(round(hi))}-{int(round(lo))}"
+            else:
+                score_range = f"{int(round(lo))}-{int(round(hi))}"
+
+            pd_anchor = st.get("pd_label") or ""
+            lines.append(
+                "      "
+                + label.ljust(15)
+                + str(st["count"]).rjust(7)
+                + f"{st['pct']:>6.2f}% ".rjust(10)
+                + score_range.rjust(16)
+                + pd_anchor.rjust(20)
+            )
+        lines.append("")
+
 
     # 9. Champion-Challenger comparison
     lines.append("## 9. CHAMPION vs CHALLENGER COMPARISON")
@@ -439,16 +760,16 @@ def step11_generate_report(
     for key, res in sorted(models.items(), key=lambda kv: -kv[1]["metrics"]["auc"]):
         m = res["metrics"]
         mtype = "[CHAMPION]" if res["champion"] else "[CHALLENGER]"
-        n_feat = len(lr_feature_names) if res["champion"] else len(RAW_FEATURE_COLUMNS)
+        n_feat = len(RAW_FEATURE_COLUMNS) if key == "xgb" else len(lr_feature_names)
         lines.append(
             f"    {res['model_name']:<32} {mtype:<12} {m['auc']:>9.4f}"
             f" {m.get('oof_auc', 'N/A'):>9} {m['business_cost']:>8}"
-            f" {m.get('calibration_method', 'N/A'):>10} {n_feat:>11}{' ← BEST' if key == best_key else ''}"
+            f" {m.get('calibration_method', 'N/A'):>10} {n_feat:>11}{' [BEST]' if key == best_key else ''}"
         )
     lines.append("")
     lines.append(
-        "  CHAMPION (LR)   : IV-filtered + scaled — transparent, explainable, regulatory-friendly\n"
-        "  CHALLENGER (XGB) : all raw features — higher AUC, Optuna-tuned, strong regularization\n"
+        "  CHAMPION (XGB)  : all raw features — best AUC, Optuna-tuned, strong regularization\n"
+        "  BENCHMARK (LR)  : IV-filtered + scaled — transparent, explainable, regulatory-friendly\n"
     )
 
     # 10. SHAP
