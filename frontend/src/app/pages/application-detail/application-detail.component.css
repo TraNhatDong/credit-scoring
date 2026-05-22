@@ -1,0 +1,111 @@
+.header-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.header-subtitle {
+  margin-top: 2px;
+}
+.status-badge-aligned {
+  margin-left: auto;
+}
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 50vh;
+}
+.not-found-state {
+  text-align: center;
+  padding: 48px;
+  color: var(--color-text-muted);
+}
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.left-column, .right-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.card-title {
+  margin-bottom: 16px;
+}
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.info-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+.info-value {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.score-results-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.score-box {
+  text-align: center;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+}
+.score-value-text {
+  font-size: 2.5rem;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+}
+.score-primary {
+  color: var(--color-primary);
+}
+.score-medium {
+  color: var(--color-medium);
+}
+.uppercase {
+  text-transform: uppercase;
+}
+.shap-title {
+  margin-bottom: 12px;
+}
+.shap-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.shap-feature {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+.shap-contribution {
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+}
+.empty-score-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+.empty-score-icon {
+  stroke: var(--color-text-muted);
+  margin-bottom: 12px;
+}
+.empty-score-text {
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.btn-score-now {
+  margin-top: 16px;
+}

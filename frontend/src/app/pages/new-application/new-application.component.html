@@ -1,0 +1,124 @@
+<div class="app-container">
+  <div class="page-title-row">
+    <h2>Tạo hồ sơ tín dụng mới</h2>
+    <p class="text-muted text-sm page-subtitle">Bước 1 — Tạo hồ sơ, sau đó nộp lên AI để chấm điểm</p>
+  </div>
+
+  @if (errorMsg) {
+    <div class="error-banner">{{ errorMsg }}</div>
+  }
+
+  <!-- Customer Section -->
+  <div class="glass-card section-card">
+    <h4 class="section-title">Thông tin khách hàng</h4>
+
+    @if (!newCustomerId) {
+      <div class="customer-form-wrapper">
+        @if (!createCustomerMode) {
+          <div class="form-group">
+            <label class="form-label">Mã khách hàng (UUID)</label>
+            <input class="glass-input" placeholder="Nhập UUID khách hàng đã có"
+              [(ngModel)]="form.customerId" />
+          </div>
+          <button class="btn btn--secondary btn-create-customer" (click)="createCustomerMode = true">
+            + Tạo khách hàng mới
+          </button>
+        } @else {
+          <div class="grid grid-cols-2 form-grid">
+            <div class="form-group">
+              <label class="form-label">Họ tên *</label>
+              <input class="glass-input" [(ngModel)]="form.fullName" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Số CCCD *</label>
+              <input class="glass-input" [(ngModel)]="form.idCardNumber" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ngày sinh *</label>
+              <input class="glass-input" type="date" [(ngModel)]="form.dateOfBirth" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Giới tính *</label>
+              <select class="glass-select" [(ngModel)]="form.gender">
+                <option value="MALE">Nam</option>
+                <option value="FEMALE">Nữ</option>
+                <option value="OTHER">Khác</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Thu nhập tháng (VND) *</label>
+              <input class="glass-input" type="number" [(ngModel)]="form.monthlyIncome" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Điện thoại</label>
+              <input class="glass-input" [(ngModel)]="form.phone" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Email</label>
+              <input class="glass-input" type="email" [(ngModel)]="form.email" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Nghề nghiệp</label>
+              <input class="glass-input" [(ngModel)]="form.occupation" />
+            </div>
+            <div class="form-group grid-col-span-2">
+              <label class="form-label">Địa chỉ</label>
+              <input class="glass-input" [(ngModel)]="form.address" />
+            </div>
+          </div>
+          <div class="action-buttons">
+            <button class="btn btn--primary" (click)="handleCreateCustomer()" [disabled]="submitting">
+              {{ submitting ? 'Đang tạo…' : 'Lưu khách hàng' }}
+            </button>
+            <button class="btn btn--secondary" (click)="createCustomerMode = false">Hủy</button>
+          </div>
+        }
+      </div>
+    } @else {
+      <div class="success-banner">
+        <span>✓</span>
+        <span>Khách hàng đã tạo: <strong class="customer-id-text">{{ newCustomerId }}</strong></span>
+        <button class="btn btn--secondary btn--sm btn-change-customer" (click)="newCustomerId = ''">Đổi</button>
+      </div>
+    }
+  </div>
+
+  <!-- Loan Details -->
+  <div class="glass-card">
+    <h4 class="section-title">Thông tin khoản vay</h4>
+    <div class="grid grid-cols-2 form-grid">
+      <div class="form-group">
+        <label class="form-label">Số tiền vay (VND) *</label>
+        <input class="glass-input" type="number" placeholder="50000000" [(ngModel)]="form.requestedAmount" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Thời hạn (tháng) *</label>
+        <select class="glass-select" [(ngModel)]="form.loanTermMonths">
+          @for (m of termOptions; track m) {
+            <option [value]="m">{{ m }} tháng</option>
+          }
+        </select>
+      </div>
+      <div class="form-group grid-col-span-2">
+        <label class="form-label">Mục đích vay *</label>
+        <select class="glass-select" [(ngModel)]="form.loanPurpose">
+          <option value="">-- Chọn mục đích --</option>
+          <option value="MUA_NHA">Mua nhà / Bất động sản</option>
+          <option value="MUA_XE">Mua xe</option>
+          <option value="KINH_DOANH">Kinh doanh</option>
+          <option value="TIÊU_DUNG">Tiêu dùng</option>
+          <option value="HOC_PHI">Học phí</option>
+          <option value="Y_TE">Y tế</option>
+          <option value="KHAC">Khác</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button class="btn btn--secondary" (click)="navigateToApplications()">Hủy</button>
+    <button class="btn btn--primary" [disabled]="submitting || (!newCustomerId && !form.customerId) || !form.requestedAmount || !form.loanPurpose" (click)="handleCreateApp()">
+      {{ submitting ? 'Đang tạo…' : 'Tạo & tiếp tục chấm điểm →' }}
+    </button>
+  </div>
+</div>

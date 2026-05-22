@@ -192,8 +192,8 @@ class ScoringService:
             shap_exp, risk_prob = self._mock_explain(req)
             model_name = "mock"
 
-        credit_score = self._prob_to_score(risk_prob)
-        risk_level   = self._prob_to_risk_level(risk_prob)
+        credit_score = self._prob_to_score(risk_prob, clamp_min=True)
+        risk_level   = self._score_to_risk_level(credit_score)
         elapsed_ms   = int((time.perf_counter() - t0) * 1000)
 
         logger.info(
@@ -202,6 +202,7 @@ class ScoringService:
         )
 
         return ScoringResponse(
+            application_id=req.application_id,
             credit_score=credit_score,
             risk_probability=round(risk_prob, 4),
             risk_level=risk_level,
@@ -257,8 +258,8 @@ class ScoringService:
             threshold = data.get("threshold",
                                 data.get("metrics", {}).get("final_threshold", 0.5))
             pred  = int(prob >= threshold)
-            score = self._prob_to_score(prob)
-            risk  = self._prob_to_risk_level(prob)
+            score = self._prob_to_score(prob, clamp_min=True)
+            risk  = self._score_to_risk_level(score)
 
             probabilities.append((key, prob, auc))
 
@@ -285,6 +286,12 @@ class ScoringService:
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
         return {
+            "application_id": req.application_id,
+            # Top-level fields — alias for the ensemble result (convenience for callers)
+            "creditScore":     ensemble.get("credit_score"),
+            "riskProbability": ensemble.get("risk_probability"),
+            "riskLevel":       ensemble.get("risk_level"),
+            "shapExplanations": ensemble.get("shap_explanations"),
             "models":             model_results,
             "ensemble":          ensemble,
             "pipeline_metadata": self._metadata,
@@ -330,7 +337,20 @@ class ScoringService:
         preprocessor = self._preprocessors.get(model_key)
 
         if preprocessor is not None:
-            df = pd.DataFrame([req.model_dump()])
+            req_data = req.model_dump(exclude={"application_id"})
+            df = pd.DataFrame([req_data])
+            # Snake_case (Pydantic) → PascalCase/hyphens (Preprocessor expects)
+            df = df.rename(columns={
+                "revolving_utilization_of_unsecured_lines": "RevolvingUtilizationOfUnsecuredLines",
+                "number_of_time30_59days_past_due_not_worse": "NumberOfTime30-59DaysPastDueNotWorse",
+                "debt_ratio":                               "DebtRatio",
+                "monthly_income":                            "MonthlyIncome",
+                "number_of_open_credit_lines_and_loans":     "NumberOfOpenCreditLinesAndLoans",
+                "number_of_times90days_late":                "NumberOfTimes90DaysLate",
+                "number_real_estate_loans_or_lines":        "NumberRealEstateLoansOrLines",
+                "number_of_time60_89days_past_due_not_worse": "NumberOfTime60-89DaysPastDueNotWorse",
+                "number_of_dependents":                      "NumberOfDependents",
+            })
             df = preprocessor.transform(df)
         else:
             # Fallback: manual preprocessing (dev only, no preprocessor_state in artifact)
@@ -373,6 +393,29 @@ class ScoringService:
 
         pd_calibrated = float(np.asarray(pd_calibrated).item())
 
+        # ── Step 6b: Calibration sanity check ──────────────────────────────────
+        # Isotonic regression can overfit at tails (especially for class-imbalanced data
+        # with ~6.7% default rate).  Detect pathological cases and blend with raw prob.
+        #
+        # Thresholds derived from the GMSC training data distribution:
+        #   - Very low P (e.g. 0.001) is often trustworthy for "clean" borrowers
+        #   - Very high P (> 0.5) is trustworthy for clearly risky borrowers
+        #   - Mid-range P (0.01–0.5) where isotonic can swing wildly → check ratio
+        raw_prob = float(pd_raw)
+        CALIB_SANITY_MIN = 0.001   # P below this → skip blending (trust raw)
+        CALIB_SANITY_MAX = 0.500   # P above this → skip blending (trust raw)
+        CALIB_SANITY_RATIO = 10.0  # if calibrated/raw > 10x → suspicious isotonic overshoot
+
+        if (CALIB_SANITY_MIN <= raw_prob <= CALIB_SANITY_MAX
+                and pd_calibrated > 0
+                and pd_calibrated / raw_prob > CALIB_SANITY_RATIO):
+            logger.warning(
+                "Suspicious isotonic calibration: raw=%.4f calibrated=%.4f (ratio=%.1fx) "
+                "-- blending 70%% raw + 30%% calibrated",
+                raw_prob, pd_calibrated, pd_calibrated / raw_prob,
+            )
+            pd_calibrated = 0.70 * raw_prob + 0.30 * pd_calibrated
+
         # ── Step 7: NaN guard + range validation ─────────────────────────────────
         if np.isnan(pd_calibrated):
             raise ValueError(
@@ -394,8 +437,24 @@ class ScoringService:
         Applies impute → engineer → clip manually.
         This is NOT used in production — it only exists as a dev safety net.
         """
-        d = req.model_dump()
+        # Start with snake_case columns (Pydantic alias names)
+        d = req.model_dump(exclude={"application_id"})
         df = pd.DataFrame([d])
+
+        # Rename snake_case (Pydantic) → PascalCase/hyphens (GMSC dataset names)
+        # so that subsequent engineer/clip operations use the same names as
+        # the real preprocessor trained on the original GMSC dataset.
+        df = df.rename(columns={
+            "revolving_utilization_of_unsecured_lines":  "RevolvingUtilizationOfUnsecuredLines",
+            "number_of_time30_59days_past_due_not_worse": "NumberOfTime30-59DaysPastDueNotWorse",
+            "debt_ratio":                               "DebtRatio",
+            "monthly_income":                            "MonthlyIncome",
+            "number_of_open_credit_lines_and_loans":     "NumberOfOpenCreditLinesAndLoans",
+            "number_of_times90days_late":                "NumberOfTimes90DaysLate",
+            "number_real_estate_loans_or_lines":         "NumberRealEstateLoansOrLines",
+            "number_of_time60_89days_past_due_not_worse": "NumberOfTime60-89DaysPastDueNotWorse",
+            "number_of_dependents":                      "NumberOfDependents",
+        })
 
         # Impute
         df["NumberOfDependents"] = df["NumberOfDependents"].fillna(0)
@@ -421,6 +480,35 @@ class ScoringService:
         return df
 
     # ── SHAP helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _rescale_shap_to_prob(
+        shap_values: np.ndarray,
+        base_value: float,
+        target_prob: float,
+    ) -> tuple[float, np.ndarray]:
+        """
+        Rescale SHAP contributions so they sum to target_prob.
+
+        SHAP values from an individual model explainer are relative to that
+        model's base_value.  When we want SHAP explanations for an ensemble
+        probability (which differs from any single model's output), we scale
+        both base_value and the per-feature contributions proportionally so
+        that base_value + sum(contributions) == target_prob.
+
+        This keeps the relative importance of each feature unchanged while
+        anchoring the absolute contribution to the correct probability.
+        """
+        contributions = shap_values
+        total_contrib = float(contributions.sum())
+        current_prob = base_value + total_contrib
+        if abs(current_prob) < 1e-9:
+            return base_value, contributions
+        scale = (target_prob - base_value) / current_prob
+        # Guard: only rescale if scale is reasonable (avoid pathological cases)
+        if 0.2 <= scale <= 5.0:
+            return base_value, contributions * scale
+        return base_value, contributions
 
     def _build_shap_explainer(
         self,
@@ -475,7 +563,19 @@ class ScoringService:
         preprocessor = self._preprocessors.get(preprocessor_key)
 
         if preprocessor is not None:
-            df = pd.DataFrame([req.model_dump()])
+            req_data = req.model_dump(exclude={"application_id"})
+            df = pd.DataFrame([req_data])
+            df = df.rename(columns={
+                "revolving_utilization_of_unsecured_lines": "RevolvingUtilizationOfUnsecuredLines",
+                "number_of_time30_59days_past_due_not_worse": "NumberOfTime30-59DaysPastDueNotWorse",
+                "debt_ratio":                               "DebtRatio",
+                "monthly_income":                            "MonthlyIncome",
+                "number_of_open_credit_lines_and_loans":     "NumberOfOpenCreditLinesAndLoans",
+                "number_of_times90days_late":                "NumberOfTimes90DaysLate",
+                "number_real_estate_loans_or_lines":        "NumberRealEstateLoansOrLines",
+                "number_of_time60_89days_past_due_not_worse": "NumberOfTime60-89DaysPastDueNotWorse",
+                "number_of_dependents":                      "NumberOfDependents",
+            })
             df = preprocessor.transform(df)
         else:
             df = self._manual_transform(req)
@@ -504,6 +604,7 @@ class ScoringService:
         data: dict[str, Any],
         model_type: str,
         calibrated_prob: float | None = None,
+        target_prob: float | None = None,
     ) -> tuple[list[dict], float]:
         """
         Call SHAP Explainer and return structured explanations + probability.
@@ -511,8 +612,14 @@ class ScoringService:
         The feature array passed to the explainer must match the exact shape
         and column order the model was trained on (handled by _get_X_for_model).
 
-        Probability is the calibrated value from _predict_core, not reconstructed
-        from sigmoid(base + sum(shap)).
+        If target_prob is provided (e.g. ensemble probability) and differs from
+        calibrated_prob (single-model probability), SHAP values are rescaled
+        proportionally so base_value + sum(contrib) == target_prob.  This keeps
+        feature importance relative while anchoring contributions to the correct
+        absolute probability.
+
+        Probability returned is always the calibrated (single-model or ensemble)
+        probability, NOT reconstructed from sigmoid(base + sum(shap)).
         """
         X, feature_names = self._get_X_for_model(req, data, model_type)
         X = np.atleast_2d(X).astype(np.float64)
@@ -524,19 +631,29 @@ class ScoringService:
         shap_values = result.values
         base_value = float(result.base_values[0]) if hasattr(result, "base_values") else 0.0
 
+        # Handle SHAP output shape variations
         if shap_values.ndim == 3:
             shap_values = shap_values[:, :, 1]
+        elif shap_values.ndim == 2:
+            shap_values = shap_values[0]  # Take first row for single prediction
 
-        # Use calibrated probability — SHAP explains model behaviour, not calibration
+        # Ensure 1D array
+        shap_values = np.asarray(shap_values).flatten()
+
         prob = calibrated_prob if calibrated_prob is not None else (
-            float(np.clip(1 / (1 + np.exp(-(base_value + shap_values[0].sum()))), 0.0, 1.0))
+            float(np.clip(1 / (1 + np.exp(-(base_value + shap_values.sum()))), 0.0, 1.0))
         )
 
+        # Rescale SHAP contributions if explaining a different probability (e.g. ensemble)
+        if target_prob is not None and target_prob != prob:
+            base_value, shap_values = self._rescale_shap_to_prob(shap_values, base_value, target_prob)
+
         # Slice to the model's feature dimensionality
+        n_features = min(n, len(shap_values), len(feature_names))
         explanations = self._build_explanations(
-            shap_values[0][:n],
-            X[0][:n],
-            feature_names[:n],
+            shap_values[:n_features],
+            X[0][:n_features],
+            feature_names[:n_features],
         )
         return explanations, prob
 
@@ -547,12 +664,14 @@ class ScoringService:
         data: dict[str, Any],
         model_type: str,
         calibrated_prob: float | None = None,
+        target_prob: float | None = None,
     ) -> tuple[list[dict], float]:
         """Get SHAP explanations for a specific model, with mock fallback."""
         if model_key in self._shap_exp:
             return self._call_shap_explainer(
                 self._shap_exp[model_key], req, data, model_type,
                 calibrated_prob=calibrated_prob,
+                target_prob=target_prob,
             )
         return self._mock_explain(req)
 
@@ -561,12 +680,25 @@ class ScoringService:
         shap_values: np.ndarray,
         feature_values: np.ndarray,
         feature_names: list[str] | None = None,
-        neutral_threshold: float = 1.0,
+        neutral_threshold: float = 0.05,
     ) -> list[dict]:
-        """Convert raw SHAP values into sorted explanation dicts."""
+        """
+        Convert raw SHAP values into sorted explanation dicts.
+
+        Direction convention (matches SHAP standard — class=1 = default):
+          - POSITIVE contribution → pushes probability of default UP → red badge (higher risk)
+          - NEGATIVE contribution → pushes probability of default DOWN → green badge (lower risk)
+
+        neutral_threshold=0.05: features with |contribution| < 0.05 are marked NEUTRAL
+        (XGBoost SHAP values are typically in [-1.0, +1.0]; 0.05 avoids over-colouring minor features).
+        """
         contributions = []
         for i, feat_name in enumerate(feature_names or []):
-            contribution = float(shap_values[i])
+            raw_val = shap_values[i] if i < len(shap_values) else 0.0
+            # Handle multi-dimensional arrays from some SHAP explainers
+            while isinstance(raw_val, np.ndarray) and raw_val.size > 1:
+                raw_val = raw_val.flat[0] if raw_val.ndim > 1 else raw_val[0]
+            contribution = float(raw_val)
             abs_c = abs(contribution)
             if abs_c < neutral_threshold:
                 direction = "NEUTRAL"
@@ -610,16 +742,18 @@ class ScoringService:
             else:
                 votes["rejected"] += 1
 
-        ensemble_score = self._prob_to_score(weighted_prob)
-        ensemble_risk  = self._prob_to_risk_level(weighted_prob)
+        ensemble_score = self._prob_to_score(weighted_prob, clamp_min=True)
+        ensemble_risk  = self._score_to_risk_level(ensemble_score)
 
-        # SHAP from best model (highest AUC) — pass calibrated probability
+        # SHAP from best model (highest AUC) — rescale to ensemble probability
         best_key = max(probabilities, key=lambda x: x[2])[0]
         best_prob = next(p for k, p, _ in probabilities if k == best_key)
         data = self._models[best_key]
         model_type = data.get("model_type", "tree")
         best_shap, _ = self._get_shap_explanations(
-            best_key, req, data, model_type, calibrated_prob=best_prob,
+            best_key, req, data, model_type,
+            calibrated_prob=best_prob,
+            target_prob=weighted_prob,
         )
 
         return {
@@ -638,28 +772,50 @@ class ScoringService:
         self,
         req: ScoringRequest,
     ) -> tuple[list[dict], float]:
-        """Deterministic mock SHAP explanations when no model is loaded."""
-        import random
-        d = req.model_dump()
-        arr = np.array(list(d.values()), dtype=np.float64)
-        seed = int(sum(arr) * 1000) % (2**31)
-        rng = random.Random(seed)
+        """
+        Deterministic mock SHAP explanations when no model is loaded.
 
+        Uses business-logic-based contributions so the mock is visually meaningful:
+          POSITIVE contribution → increases default risk (red)
+          NEGATIVE contribution → decreases default risk (green)
+        """
+        d = req.model_dump(exclude={"application_id"})
         explanations = []
+
+        # Approximate log-odds contribution per unit of each feature
+        # (sign conventions match the real trained models: class=1 = default)
+        contrib_map = {
+            "revolving_utilization_of_unsecured_lines":  8.0,   # higher utilization → risk
+            "number_of_time30_59days_past_due_not_worse": 5.0,  # any late payment → risk
+            "number_of_time60_89days_past_due_not_worse": 6.0,  # worse late payment → risk
+            "number_of_times90days_late":              10.0,  # 90+ days → most severe
+            "debt_ratio":                               3.0,   # higher DTI → risk
+            "age":                                      -0.2,  # older → slightly lower risk
+            "monthly_income":                           -1e-4, # higher income → lower risk (per VND)
+            "number_of_open_credit_lines_and_loans":     0.3,  # more lines → slight risk
+            "number_real_estate_loans_or_lines":       -0.2,  # real estate → lower risk
+            "number_of_dependents":                     0.5,   # more dependents → slight risk
+        }
+
+        total_contrib = 0.0
         for name, val in d.items():
-            c = round(rng.uniform(-30, 30), 2)
+            v = float(val)
+            contrib = contrib_map.get(name, 0.0) * v
+            total_contrib += contrib
+            direction = "POSITIVE" if contrib > 0.05 else "NEGATIVE" if contrib < -0.05 else "NEUTRAL"
             explanations.append({
                 "feature":      name,
-                "value":        round(float(val), 4),
-                "contribution": c,
-                "direction":    "POSITIVE" if c > 0 else "NEGATIVE",
+                "value":        round(v, 4),
+                "contribution": round(contrib, 4),
+                "direction":    direction,
             })
 
         explanations.sort(key=lambda x: abs(x["contribution"]), reverse=True)
 
-        revolver   = float(req.RevolvingUtilizationOfUnsecuredLines)
-        delay_60   = float(req.NumberOfTime60_89DaysPastDueNotWorse)
-        prob = min(0.99, max(0.01, revolver * 0.1 + delay_60 * 0.05))
+        # Approximate calibrated probability from total log-odds contribution
+        log_odds = total_contrib
+        prob = 1 / (1 + np.exp(-log_odds))
+        prob = float(np.clip(prob, 0.001, 0.999))
         return explanations, round(prob, 4)
 
     def _mock_multi_response(
@@ -667,23 +823,37 @@ class ScoringService:
         single: ScoringResponse,
         req: ScoringRequest,
     ) -> dict[str, Any]:
-        """Build a full mock multi-model response."""
+        """Build a full mock multi-model response with correct key names."""
         shap_exp = [e.model_dump() for e in single.shap_explanations]
 
-        return {
-            "models": {
-                "mock_model": {
-                    "credit_score":       single.credit_score,
-                    "risk_probability":   single.risk_probability,
-                    "risk_level":         single.risk_level.value,
-                    "shap_explanations":  shap_exp,
-                    "prediction":         "DEFAULT" if single.risk_probability > 0.5 else "GOOD",
-                    "probability":        single.risk_probability,
-                    "metrics":            {},
-                    "model_name":         "Mock Model",
-                    "model_type":         "mock",
-                }
+        mock_models = {
+            "champion_xgb": {
+                "credit_score":       single.credit_score,
+                "risk_probability":   single.risk_probability,
+                "risk_level":         single.risk_level.value,
+                "shap_explanations":  shap_exp,
+                "prediction":         "DEFAULT" if single.risk_probability > 0.5 else "GOOD",
+                "probability":        single.risk_probability,
+                "metrics":            {},
+                "model_name":         "XGBoost (Champion)",
+                "model_type":         "tree",
             },
+            "benchmark_lr": {
+                "credit_score":       single.credit_score,
+                "risk_probability":   single.risk_probability,
+                "risk_level":         single.risk_level.value,
+                "shap_explanations":  shap_exp,
+                "prediction":         "DEFAULT" if single.risk_probability > 0.5 else "GOOD",
+                "probability":        single.risk_probability,
+                "metrics":            {},
+                "model_name":         "Logistic Regression",
+                "model_type":         "linear",
+            },
+        }
+
+        return {
+            "application_id": req.application_id,
+            "models":             mock_models,
             "ensemble": {
                 "credit_score":         single.credit_score,
                 "risk_probability":     single.risk_probability,
@@ -693,15 +863,16 @@ class ScoringService:
                     if single.risk_probability > 0.5
                     else {"approved": 0, "rejected": 1},
                 "weighted_probability": single.risk_probability,
-                "best_model_key":      "mock_model",
+                "best_model_key":      "champion_xgb",
             },
             "pipeline_metadata": {},
+            "inference_ms":      single.inference_ms,
         }
 
     def _mock_ensemble(self, req: ScoringRequest) -> dict[str, Any]:
         """Fallback ensemble when no models are loaded."""
         shap_exp, prob = self._mock_explain(req)
-        score = self._prob_to_score(prob)
+        score = self._prob_to_score(prob, clamp_min=True)
         risk  = self._prob_to_risk_level(prob)
         mock_pred = "DEFAULT" if prob > 0.5 else "GOOD"
         return {
@@ -718,16 +889,22 @@ class ScoringService:
     # ── Scoring helpers ─────────────────────────────────────────────────────
 
     @staticmethod
-    def _prob_to_score(prob: float) -> int:
+    def _prob_to_score(prob: float, clamp_min: bool = False) -> int:
         """
         Map P(default) → FICO-like credit score (300–850).
 
         Formula identical to pipeline's pd_to_credit_score():
-          PD =  2% → Score = 850 (Excellent)
-          PD = 40% → Score = 300 (Very Poor)
+          PD =  0.8% → Score = 850 (Excellent — v4.1 tightened anchor)
+          PD = 50.0% → Score = 300 (Very Poor)
+
+        Args:
+            prob:      probability of default in [0, 1]
+            clamp_min: if True, score is always >= 300 (even for extreme probabilities);
+                       if False, score can go below 300 (e.g. P=0.999 → score ≈ 285).
+                       Use clamp_min=True for production-facing scores.
         """
-        TARGET_MIN_PD = 0.02
-        TARGET_MAX_PD = 0.40
+        TARGET_MIN_PD = 0.008  # 0.8% — matches pipeline's pd_to_credit_score() anchor
+        TARGET_MAX_PD = 0.50   # 50%   — matches pipeline's pd_to_credit_score() anchor
         MIN_SCORE = 300
         MAX_SCORE = 850
 
@@ -741,7 +918,10 @@ class ScoringService:
         log_range   = lo_max - lo_min
         score = MAX_SCORE - grade_range * (log_odds - lo_max) / log_range
 
-        return int(np.clip(round(score), MIN_SCORE, MAX_SCORE))
+        raw = round(score)
+        if clamp_min:
+            raw = max(raw, MIN_SCORE)
+        return int(np.clip(raw, MIN_SCORE, MAX_SCORE))
 
     @staticmethod
     def _prob_to_risk_level(prob: float) -> RiskLevel:
@@ -750,3 +930,23 @@ class ScoringService:
         elif prob < 0.15: return RiskLevel.MEDIUM
         elif prob < 0.35: return RiskLevel.HIGH
         else:             return RiskLevel.CRITICAL
+
+    @staticmethod
+    def _score_to_risk_level(score: int) -> RiskLevel:
+        """
+        Map credit score → categorical risk bucket.
+
+        Uses the FICO-like score scale (300–850) which is the Basel II standard.
+        Thresholds are calibrated to the PD→score anchor used by _prob_to_score:
+          score >= 700 → LOW      (PD <= 5.4%)
+          score >= 600 → MEDIUM    (PD <= 15.6%)
+          score >= 500 → HIGH      (PD <= 29.3%)
+          score <  500 → CRITICAL (PD > 29.3%)
+
+        NOTE: riskLevel is derived from score (not probability) to guarantee
+        consistency — score and riskLevel always agree by construction.
+        """
+        if   score >= 700: return RiskLevel.LOW
+        elif score >= 600: return RiskLevel.MEDIUM
+        elif score >= 500: return RiskLevel.HIGH
+        else:              return RiskLevel.CRITICAL

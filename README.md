@@ -1,53 +1,151 @@
-# 🏦 Enterprise Credit Scoring System
+# Credit Scoring System — Enterprise Microservices
 
-![Microservices](https://img.shields.io/badge/Architecture-Microservices-blue)
-![Java](https://img.shields.io/badge/Java-25-orange)
-![Spring Boot](https://img.shields.io/badge/Spring_Boot-3-brightgreen)
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Ready-blue)
+## Architecture Overview
 
-Hệ thống Chấm điểm Tín dụng (Credit Scoring) tự động đánh giá rủi ro hồ sơ vay vốn của khách hàng dựa trên dữ liệu lịch sử và các chỉ số tài chính. Hệ thống được thiết kế theo tiêu chuẩn phần mềm doanh nghiệp, tích hợp Trí tuệ nhân tạo có thể giải thích (Explainable AI - XAI) để đảm bảo tính minh bạch trong các quyết định tài chính.
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Frontend (React)                       │
+│            Dashboard · Glassmorphism UI                  │
+│                        :3000                              │
+└──────────────┬──────────────────────────┬─────────────────┘
+               │                          │
+               ▼                          ▼
+┌──────────────────────────┐  ┌──────────────────────────┐
+│    Core Backend          │  │      AI Service          │
+│    (Java 25 + SB3)       │◄─┤    (Python 3.10 + FastAPI)│
+│    :8080                 │  │    :8001                 │
+│    REST · JPA · WebClient│  │    XGBoost + SHAP        │
+└──────────────┬───────────┘  └──────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────────────────────┐
+│              PostgreSQL 16 (JSONB + Partitioning)        │
+│                      :5432                               │
+│  customers · credit_applications · ai_audit_log         │
+└──────────────────────────────────────────────────────────┘
+```
 
-## 🌟 Tính năng nổi bật
-* **Đánh giá rủi ro thời gian thực:** Dự đoán tỷ lệ nợ xấu bằng các mô hình học máy mạnh mẽ (XGBoost/Random Forest).
-* **AI Giải thích được (XAI):** Tích hợp thư viện SHAP để phân tích và xuất báo cáo lý do cấu thành điểm tín dụng (yếu tố nào cộng điểm, yếu tố nào trừ điểm).
-* **Kiến trúc Microservices:** Tách biệt hoàn toàn luồng xử lý AI (Python) và luồng nghiệp vụ lõi (Java).
-* **Giao diện hiện đại:** Giao diện quản trị áp dụng phong cách Glassmorphism chuyên nghiệp, trực quan hóa dữ liệu rủi ro.
+## Quick Start
 
-## 🛠 Tech Stack
+### Prerequisites
+- Docker & Docker Compose
+- Git
+- 8 GB RAM recommended
 
-### AI Service (Phân tích dữ liệu & Mô hình)
-* **Framework:** FastAPI (Python 3.10+)
-* **Machine Learning:** Scikit-learn, XGBoost
-* **Explainable AI:** SHAP
-* **Data Processing:** Pandas, SMOTE (Xử lý mất cân bằng dữ liệu)
+### Run all services
 
-### Core Backend (Nghiệp vụ lõi)
-* **Ngôn ngữ & Framework:** Java 25, Spring Boot 3
-* **Database:** PostgreSQL (Sử dụng chuẩn 3NF và cột `JSONB` để lưu Audit Log, SHAP response)
-* **Tích hợp:** RESTful API, Global Exception Handling
+```bash
+# 1. Clone / navigate to project
+cd credit-scoring
 
-### Deployment & DevOps
-* Container hóa bằng Docker & Docker Compose.
+# 2. Generate training data + train model (optional, uses mock if skipped)
+cd ai-service
+pip install -r requirements.txt
+python -m app.scripts.generate_data --rows 50000 --output data/credit_train.csv
+python -m app.scripts.train_model --data data/credit_train.csv --model models/
 
-## 📂 Cấu trúc thư mục (Folder Structure)
+# 3. Build & start all containers
+cd ..
+docker-compose up --build
 
-```text
-enterprise-credit-scoring/
-├── ai-service/                # Python FastAPI Microservice
-│   ├── app/                   # API logic & Pydantic models
-│   ├── models/                # File .pkl/.onnx chứa mô hình đã train
-│   ├── notebooks/             # Jupyter notebooks (EDA, Training)
-│   ├── requirements.txt       
-│   └── Dockerfile
-├── core-backend/              # Java Spring Boot Microservice
-│   ├── src/main/java/         # Controllers, Services, Repositories
-│   ├── src/main/resources/    # application.yml
-│   ├── pom.xml
-│   └── Dockerfile
-├── frontend/                  # Giao diện người dùng
-│   ├── src/                   # React/Vue components (Glassmorphism UI)
-│   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml         # File khởi chạy toàn bộ hệ thống
-└── README.md
+# Services will be available at:
+#   Frontend     http://localhost:3000
+#   Backend API  http://localhost:8080/api/v1
+#   AI Service   http://localhost:8001/docs
+#   PostgreSQL   localhost:5432
+```
+
+## Services
+
+### AI Service (`ai-service/`)
+- **FastAPI** REST API with Pydantic validation
+- **XGBoost** binary classifier for default prediction
+- **SHAP TreeExplainer** for per-feature attribution
+- Mock mode (no model file needed for development)
+- Multi-stage Dockerfile, non-root user
+
+```
+POST /api/v1/score          → credit_score, risk_probability, shap_explanations
+GET  /api/v1/model-info     → model metadata
+GET  /health                → liveness probe
+```
+
+### Core Backend (`core-backend/`)
+- **Spring Boot 3.3** with Java 25
+- **Spring Data JPA** + PostgreSQL
+- **WebClient** for async AI service calls with retry
+- `@RestControllerAdvice` global exception handling
+- JSONB columns for AI audit trail
+
+```
+POST /api/v1/customers           → create customer
+GET  /api/v1/customers           → list customers
+POST /api/v1/applications        → create application
+POST /api/v1/applications/submit → submit to AI scoring
+POST /api/v1/applications/decide → approve/reject
+```
+
+### Frontend (`frontend/`)
+- **React 18** + **Vite** + **TypeScript**
+- **Glassmorphism** design system (CSS-only, no UI library)
+- Scoring page with animated score gauge + SHAP waterfall bars
+- Full CRUD for customers and applications
+
+### Database (`db/migrations/`)
+- PostgreSQL 16 with `uuid-ossp` extension
+- 3NF schema: `customers`, `credit_applications`, `ai_audit_log`
+- `ai_audit_log` table is **partitioned by month** (rolling 12-month window)
+- JSONB columns for request/response audit trail
+- Auto-update `updated_at` triggers
+
+## Key Business Rules
+
+| Condition | Action |
+|---|---|
+| Score ≥ 700 **AND** Risk = LOW | Auto-approve (SYSTEM_AUTO) |
+| Score < 580 **OR** Risk = CRITICAL | Manual review required |
+| Any status except COMPLETED | Cannot decide |
+
+## Score Bands
+
+| Probability | Score Range | Risk Level |
+|---|---|---|
+| < 5% | 740–850 | LOW |
+| 5–15% | 580–740 | MEDIUM |
+| 15–35% | 500–580 | HIGH |
+| > 35% | 300–500 | CRITICAL |
+
+## Environment Variables
+
+### Core Backend (`application.yml`)
+```yaml
+SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/credit_scoring
+SPRING_DATASOURCE_USERNAME: credit_user
+SPRING_DATASOURCE_PASSWORD: credit_pass_secure_2026
+AI_SERVICE_URL: http://ai-service:8001
+```
+
+### AI Service (`config.py`)
+```env
+MODEL_PATH=/app/models/credit_xgb_model.pkl
+LOG_LEVEL=INFO
+```
+
+## Testing
+
+### AI Service
+```bash
+cd ai-service
+pip install pytest
+pytest tests/ -v
+```
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, Vite, TypeScript, Lucide Icons |
+| Backend | Java 25, Spring Boot 3.3 |
+| AI | Python 3.10, FastAPI, XGBoost, SHAP |
+| Database | PostgreSQL 16 |
+| Container | Docker, Docker Compose |

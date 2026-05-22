@@ -1,0 +1,66 @@
+.page-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.page-subtitle {
+  margin-top: 4px;
+}
+.actions-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.filter-select {
+  width: 180px;
+}
+.table-card {
+  padding: 0;
+  overflow: hidden;
+}
+.loading-container {
+  padding: 24px;
+}
+.table-row-skeleton {
+  height: 52px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+}
+.empty-state {
+  padding: 48px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.app-id-link {
+  color: var(--color-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+.amount-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+}
+.score-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+}
+.score-empty {
+  color: var(--color-text-muted);
+}
+.date-cell {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+.pagination-container {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+.pagination-info {
+  display: flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}

@@ -1,0 +1,60 @@
+<div class="dashboard">
+  <div class="page-header">
+    <h1>Credit Scoring Dashboard</h1>
+    <p class="text-muted">AI-powered credit risk assessment</p>
+  </div>
+
+  <div class="hero-card glass-card">
+    <div class="hero-content">
+      <div class="hero-icon">⚡</div>
+      <div>
+        <h2 class="hero-title">Chấm điểm tín dụng bằng AI</h2>
+        <p class="hero-desc">
+          Nhập đặc điểm tín dụng — nhận ngay điểm FICO-like, xác suất nợ xấu và giải thích SHAP chi tiết.
+        </p>
+      </div>
+      <a routerLink="/scoring" class="btn btn--primary hero-cta">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+        Bắt đầu chấm điểm
+      </a>
+    </div>
+  </div>
+
+  <div class="info-grid">
+    <div class="glass-card info-card">
+      <div class="info-icon">📊</div>
+      <div class="info-title">XGBoost Champion</div>
+      <div class="info-value">AUC 0.8715</div>
+      <div class="info-sub">Test AUC • 16 features • Optuna-tuned</div>
+    </div>
+    <div class="glass-card info-card">
+      <div class="info-icon">📉</div>
+      <div class="info-title">Logistic Regression</div>
+      <div class="info-value">AUC 0.8596</div>
+      <div class="info-sub">Benchmark • 14 IV-filtered features</div>
+    </div>
+    <div class="glass-card info-card">
+      <div class="info-icon">🔬</div>
+      <div class="info-title">Isotonic Calibration</div>
+      <div class="info-value">PD ≤ 1%</div>
+      <div class="info-sub">Basel II / IFRS 9 compliant</div>
+    </div>
+    <div class="glass-card info-card">
+      <div class="info-icon">🔍</div>
+      <div class="info-title">SHAP Explainability</div>
+      <div class="info-value">Top 5 features</div>
+      <div class="info-sub">Per-prediction attribution</div>
+    </div>
+  </div>
+
+  <div class="tips-section">
+    <h3 class="tips-title">Về hệ thống</h3>
+    <ul class="tips-list">
+      @for (tip of tips; track tip) {
+        <li>{{ tip }}</li>
+      }
+    </ul>
+  </div>
+</div>

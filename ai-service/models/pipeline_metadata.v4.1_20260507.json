@@ -1,0 +1,272 @@
+{
+  "pipeline_version": "v4.1_20260507",
+  "iv_threshold": 0.02,
+  "n_splits": 5,
+  "calibration_min_n": 500,
+  "iv_scores": {
+    "RevolvingUtilizationOfUnsecuredLines": 1.116185,
+    "age": 0.257108,
+    "NumberOfTime30-59DaysPastDueNotWorse": 0.727913,
+    "DebtRatio": 0.025587,
+    "MonthlyIncome": 0.074893,
+    "NumberOfOpenCreditLinesAndLoans": 0.072717,
+    "NumberOfTimes90DaysLate": 0.896542,
+    "NumberRealEstateLoansOrLines": 0.010891,
+    "NumberOfTime60-89DaysPastDueNotWorse": 0.605755,
+    "NumberOfDependents": 0.037591,
+    "monthly_debt": 0.032399,
+    "late_payments_total": 1.054516,
+    "debt_per_person": 0.0284,
+    "income_per_credit_line": 0.023799,
+    "utilization_per_line": 0.926609,
+    "is_income_missing": 0.009177
+  },
+  "lr_features": [
+    "RevolvingUtilizationOfUnsecuredLines",
+    "age",
+    "NumberOfTime30-59DaysPastDueNotWorse",
+    "DebtRatio",
+    "MonthlyIncome",
+    "NumberOfOpenCreditLinesAndLoans",
+    "NumberOfTimes90DaysLate",
+    "NumberOfTime60-89DaysPastDueNotWorse",
+    "NumberOfDependents",
+    "monthly_debt",
+    "late_payments_total",
+    "debt_per_person",
+    "income_per_credit_line",
+    "utilization_per_line"
+  ],
+  "n_lr_features": 14,
+  "n_xgb_features": 16,
+  "thresholds_evaluated": [
+    0.3,
+    0.4,
+    0.5,
+    0.6
+  ],
+  "cost_fp": 1.0,
+  "cost_fn": 3.0,
+  "threshold_strategy": "cost",
+  "champion": {
+    "key": "xgb",
+    "model_name": "XGBoost (Champion)",
+    "test_auc": 0.8715,
+    "oof_auc": 0.8646,
+    "k_fold_aucs": [
+      0.8608,
+      0.8639,
+      0.8655,
+      0.866,
+      0.8679
+    ],
+    "final_threshold": 0.23,
+    "threshold_robustness": {
+      "val_thresh_opt": 0.23,
+      "test_opt": 0.2,
+      "val_thresh_cost": 0.23,
+      "test_cost": 0.21,
+      "opt_delta": 0.03,
+      "cost_delta": 0.02,
+      "opt_delta_pct": 0.1304,
+      "cost_delta_pct": 0.087
+    },
+    "calibration_method": "isotonic",
+    "bad_rate": {
+      "bad_rate_train": 0.066838,
+      "bad_rate_test": 0.066844,
+      "drift": 6e-06,
+      "threshold": 0.05,
+      "flag": false,
+      "flag_reason": null
+    },
+    "metrics": {
+      "auc": 0.8715,
+      "oof_auc": 0.8646,
+      "k_fold_aucs": [
+        0.8608,
+        0.8639,
+        0.8655,
+        0.866,
+        0.8679
+      ],
+      "k_fold_mean": 0.8648,
+      "k_fold_std": 0.0024,
+      "accuracy": 0.9188,
+      "precision": 0.4104,
+      "recall": 0.4934,
+      "f1": 0.4481,
+      "optimal_threshold": 0.23,
+      "optimal_f1": 0.4402,
+      "cost_threshold": 0.23,
+      "business_cost": 3400.0,
+      "final_threshold": 0.23,
+      "threshold_strategy": "cost",
+      "calibration_method": "isotonic",
+      "best_iter_median": 111,
+      "optuna_val_auc": null,
+      "optuna_params": {
+        "n_estimators": 1000,
+        "max_depth": 5,
+        "learning_rate": 0.05,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "min_child_weight": 2,
+        "gamma": 0.5,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0
+      },
+      "psi_dev": 0.0,
+      "psi_test": 0.0013,
+      "psi_dev_band": "No shift (< 0.1)",
+      "psi_test_band": "No shift (< 0.1)"
+    }
+  },
+  "challenger": {
+    "key": "lr",
+    "model_name": "Logistic Regression (Benchmark)",
+    "test_auc": 0.8596,
+    "oof_auc": 0.8501,
+    "k_fold_aucs": [
+      0.8432,
+      0.8489,
+      0.8522,
+      0.8532,
+      0.8532
+    ],
+    "final_threshold": 0.25,
+    "threshold_robustness": {
+      "val_thresh_opt": 0.19,
+      "test_opt": 0.2,
+      "val_thresh_cost": 0.25,
+      "test_cost": 0.2,
+      "opt_delta": 0.01,
+      "cost_delta": 0.05,
+      "opt_delta_pct": 0.0526,
+      "cost_delta_pct": 0.2
+    },
+    "calibration_method": "isotonic",
+    "optuna_params": null,
+    "optuna_val_auc": null,
+    "best_iter_median": null,
+    "bad_rate": {
+      "bad_rate_train": 0.066838,
+      "bad_rate_test": 0.066844,
+      "drift": 6e-06,
+      "threshold": 0.05,
+      "flag": false,
+      "flag_reason": null
+    },
+    "metrics": {
+      "auc": 0.8596,
+      "oof_auc": 0.8501,
+      "k_fold_aucs": [
+        0.8432,
+        0.8489,
+        0.8522,
+        0.8532,
+        0.8532
+      ],
+      "k_fold_mean": 0.8501,
+      "k_fold_std": 0.0038,
+      "accuracy": 0.9244,
+      "precision": 0.4328,
+      "recall": 0.4215,
+      "f1": 0.4271,
+      "optimal_threshold": 0.19,
+      "optimal_f1": 0.4264,
+      "cost_threshold": 0.25,
+      "business_cost": 3535.0,
+      "final_threshold": 0.25,
+      "threshold_strategy": "cost",
+      "calibration_method": "isotonic",
+      "psi_dev": 0.0,
+      "psi_test": 0.0007,
+      "psi_dev_band": "No shift (< 0.1)",
+      "psi_test_band": "No shift (< 0.1)"
+    }
+  },
+  "best_model_key": "xgb",
+  "feature_drift": {
+    "RevolvingUtilizationOfUnsecuredLines": {
+      "ks_val_thresh": 0.003,
+      "ks_test": 0.0099,
+      "psi_val_thresh": 0.0002,
+      "psi_test": 0.0005,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "late_payments_total": {
+      "ks_val_thresh": 0.0018,
+      "ks_test": 0.0021,
+      "psi_val_thresh": 0.0,
+      "psi_test": 0.0,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "utilization_per_line": {
+      "ks_val_thresh": 0.0045,
+      "ks_test": 0.0102,
+      "psi_val_thresh": 0.0004,
+      "psi_test": 0.0006,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "NumberOfTimes90DaysLate": {
+      "ks_val_thresh": 0.002,
+      "ks_test": 0.0024,
+      "psi_val_thresh": 0.0,
+      "psi_test": 0.0,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "NumberOfTime30-59DaysPastDueNotWorse": {
+      "ks_val_thresh": 0.0009,
+      "ks_test": 0.0013,
+      "psi_val_thresh": 0.0,
+      "psi_test": 0.0,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "NumberOfTime60-89DaysPastDueNotWorse": {
+      "ks_val_thresh": 0.0011,
+      "ks_test": 0.0017,
+      "psi_val_thresh": 0.0,
+      "psi_test": 0.0,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "age": {
+      "ks_val_thresh": 0.0026,
+      "ks_test": 0.0039,
+      "psi_val_thresh": 0.0002,
+      "psi_test": 0.0003,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "MonthlyIncome": {
+      "ks_val_thresh": 0.0069,
+      "ks_test": 0.0098,
+      "psi_val_thresh": 0.0004,
+      "psi_test": 0.0006,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "NumberOfOpenCreditLinesAndLoans": {
+      "ks_val_thresh": 0.0074,
+      "ks_test": 0.0052,
+      "psi_val_thresh": 0.0006,
+      "psi_test": 0.0002,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    },
+    "NumberOfDependents": {
+      "ks_val_thresh": 0.0033,
+      "ks_test": 0.0029,
+      "psi_val_thresh": 0.0001,
+      "psi_test": 0.0002,
+      "drift_flag_val_thresh": false,
+      "drift_flag_test": false
+    }
+  }
+}

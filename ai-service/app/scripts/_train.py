@@ -245,6 +245,7 @@ def _run_lr_kfold(
         "model_name":        "Logistic Regression (Benchmark)",
         "champion":          False,
         "iv_features":      iv_feature_names,
+        "feature_order":     iv_feature_names,
         "metrics":           lr_metrics,
         "shap_top5":        lr_shap_internal,
         "shap_top5_raw":    lr_shap_external,   # raw feature names for business users
@@ -269,7 +270,7 @@ def _run_xgb_kfold(
     y_train: pd.Series,
     y_val_thresh: pd.Series,
     y_test: pd.Series,
-    feature_names: list[str],
+    xgb_feature_names: list[str],
 ) -> dict[str, Any]:
     """Challenger XGB: Optuna tuning → k-fold OOF → isotonic calibration → threshold."""
     n_neg = int((y_train == 0).sum())
@@ -447,7 +448,7 @@ def _run_xgb_kfold(
         X_val_thresh, xgb_prob_thresh, xgb_final_thresh, SHAP_EVAL_SIZE,
     )
     xgb_shap = compute_shap(xgb_raw_final, "tree", None,
-                            X_val_thresh[shap_idx], feature_names)
+                            X_val_thresh[shap_idx], xgb_feature_names)
 
     return {
         "model":             xgb_raw_final,
@@ -456,6 +457,7 @@ def _run_xgb_kfold(
         "model_type":        "tree",
         "model_name":        "XGBoost (Champion)",
         "champion":          True,
+        "feature_order":     xgb_feature_names,
         "metrics":           xgb_metrics,
         "shap_top5":        xgb_shap,
         "prob_oof":         xgb_oof_proba,   # OOF (for AUC eval)

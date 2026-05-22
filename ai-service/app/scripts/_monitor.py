@@ -375,13 +375,16 @@ def step10_save_artifacts(
         bench_path = os.path.join(out_dir, f"benchmark_xgb_model.{MODEL_VERSION}.pkl")
 
     # ── LR artifact (always saved — benchmark or champion depending on AUC) ───────
-    joblib.dump({
+    lr_artifact = {
         "model":              results_lr["model"],
         "calibrator":         results_lr["calibrator"],
         "calibration_method": results_lr["calibration_method"],
         "scaler":             results_lr["scaler"],
-        "feature_names":      lr_feature_names,
+        "feature_names":       lr_feature_names,
         "feature_order":      lr_feature_names,
+        # ── CRITICAL: iv_features is used by scoring_service._n_artifact_features() ──
+        # to determine how many features this LR model uses → must match SHAP masker.
+        "iv_features":        lr_feature_names,
         "champion":           not is_xgb_champion,
         "model_type":         "linear",
         "model_version":      MODEL_VERSION,
@@ -389,35 +392,46 @@ def step10_save_artifacts(
         "iv_threshold":       0.02,
         "iv_scores":          iv_scores,
         "threshold":          results_lr["metrics"]["final_threshold"],
-        "threshold_strategy": THRESHOLD_STRATEGY,
+        "threshold_strategy":  THRESHOLD_STRATEGY,
         "scores_train":       results_lr.get("scores_train"),
-    }, champ_path if not is_xgb_champion else bench_path)
-    log.info("  Saved: %s (%s | %d IV features | %s)",
+        # ── CRITICAL: persist metrics so scoring service can access them ──────────
+        "metrics":            results_lr["metrics"],
+        "model_name":         "Logistic Regression (Benchmark)",
+    }
+    joblib.dump(lr_artifact, champ_path if not is_xgb_champion else bench_path)
+    log.info("  Saved: %s (%s | %d IV features | %s | AUC=%.4f)",
              champ_path if not is_xgb_champion else bench_path,
              "champion_lr" if not is_xgb_champion else "benchmark_lr",
-             len(lr_feature_names), results_lr["calibration_method"])
+             len(lr_feature_names), results_lr["calibration_method"],
+             results_lr["metrics"]["auc"])
 
     # ── XGB artifact ───────────────────────────────────────────────────────────
-    joblib.dump({
+    xgb_artifact = {
         "model":              results_xgb["model"],
         "calibrator":         results_xgb["calibrator"],
         "calibration_method": results_xgb["calibration_method"],
-        "feature_names":      RAW_FEATURE_COLUMNS,
-        "feature_order":      RAW_FEATURE_COLUMNS,
+        "feature_names":      results_xgb.get("feature_order", RAW_FEATURE_COLUMNS),
+        "feature_order":      results_xgb.get("feature_order", RAW_FEATURE_COLUMNS),
         "champion":           is_xgb_champion,
         "model_type":         "tree",
+        "model_name":         "XGBoost (Champion)",
         "model_version":      MODEL_VERSION,
         "preprocessor_state": preprocessor.get_state(),
         "iv_threshold":       0.02,
         "iv_scores":          iv_scores,
-        "threshold":         results_xgb["metrics"]["final_threshold"],
-        "threshold_strategy": THRESHOLD_STRATEGY,
-        "scores_train":      results_xgb.get("scores_train"),
-    }, champ_path if is_xgb_champion else bench_path)
-    log.info("  Saved: %s (%s | %d raw features | %s)",
+        "threshold":          results_xgb["metrics"]["final_threshold"],
+        "threshold_strategy":  THRESHOLD_STRATEGY,
+        "scores_train":       results_xgb.get("scores_train"),
+        # ── CRITICAL: persist metrics so scoring service can access them ──────────
+        "metrics":            results_xgb["metrics"],
+        "model_name":         "XGBoost (Champion)",
+    }
+    joblib.dump(xgb_artifact, champ_path if is_xgb_champion else bench_path)
+    log.info("  Saved: %s (%s | %d raw features | %s | AUC=%.4f)",
              champ_path if is_xgb_champion else bench_path,
              "champion_xgb" if is_xgb_champion else "benchmark_xgb",
-             len(RAW_FEATURE_COLUMNS), results_xgb["calibration_method"])
+             len(RAW_FEATURE_COLUMNS), results_xgb["calibration_method"],
+             results_xgb["metrics"]["auc"])
 
     # ── Pipeline metadata JSON ────────────────────────────────────────────────
     def _summarise(m: dict) -> dict:

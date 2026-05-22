@@ -1,0 +1,208 @@
+<div>
+  <!-- Header -->
+  <div class="scoring-header">
+    <div>
+      <h2>Chấm điểm tín dụng — Multi-AI</h2>
+      <p class="text-muted text-sm">Nhập đặc điểm tín dụng để nhận điểm và giải thích SHAP</p>
+    </div>
+  </div>
+
+  @if (errorMsg) { <div class="error-banner">{{ errorMsg }}</div> }
+
+  <!-- Algorithm Banner -->
+  <div class="algo-banner-grid">
+    @for (algo of algorithms; track algo.name) {
+      <div class="glass-card--flat algo-card">
+        <div class="algo-icon">{{ algo.icon }}</div>
+        <div class="algo-name" [style.color]="algo.color">{{ algo.name }}</div>
+        <div class="algo-cat">{{ algo.cat }}</div>
+        <div class="algo-desc">{{ algo.desc }}</div>
+      </div>
+    }
+  </div>
+
+  <div class="main-content-grid">
+    <!-- LEFT: Form -->
+    <div class="left-col">
+      <div class="glass-card">
+        <h3 class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"
+            class="card-icon">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          Đặc điểm tín dụng
+        </h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Tuổi</label>
+            <input class="glass-input" type="number" min="0" max="120" [(ngModel)]="form.age" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Thu nhập tháng (VND)</label>
+            <input class="glass-input" type="number" min="1" step="1000" [(ngModel)]="form.MonthlyIncome" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tỷ lệ SD hạn mức tín dụng</label>
+            <input class="glass-input" type="number" min="0" step="0.01" [(ngModel)]="form.RevolvingUtilizationOfUnsecuredLines" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tỷ lệ Nợ/Thu nhập</label>
+            <input class="glass-input" type="number" min="0" step="0.01" [(ngModel)]="form.DebtRatio" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số lần trễ 30-59 ngày</label>
+            <input class="glass-input" type="number" min="0" max="24" [(ngModel)]="form.NumberOfTime30_59DaysPastDueNotWorse" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số lần trễ 60-89 ngày</label>
+            <input class="glass-input" type="number" min="0" max="24" [(ngModel)]="form.NumberOfTime60_89DaysPastDueNotWorse" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số lần trễ ≥90 ngày</label>
+            <input class="glass-input" type="number" min="0" max="24" [(ngModel)]="form.NumberOfTimes90DaysLate" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số hạn mức tín dụng đang mở</label>
+            <input class="glass-input" type="number" min="0" max="30" [(ngModel)]="form.NumberOfOpenCreditLinesAndLoans" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số khoản vay bất động sản</label>
+            <input class="glass-input" type="number" min="0" max="20" [(ngModel)]="form.NumberRealEstateLoansOrLines" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Số người phụ thuộc</label>
+            <input class="glass-input" type="number" min="0" max="20" step="0.5" [(ngModel)]="form.NumberOfDependents" />
+          </div>
+        </div>
+
+        <button class="btn btn--primary btn--full btn-score" [disabled]="scoring" (click)="handleScore()">
+          @if (scoring) {
+            <span class="spinner"></span> Đang chấm điểm…
+          } @else {
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <path d="M6 9v3a3 3 0 0 0 3 3h3M15 6h3a3 3 0 0 1 0 6h-3"/>
+            </svg>
+            Chấm điểm với AI
+          }
+        </button>
+      </div>
+
+      <!-- Model Comparison -->
+      @if (multiResult) {
+        <div class="glass-card">
+          <h3 class="card-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2"
+              class="card-icon">
+              <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <path d="M6 9v3a3 3 0 0 0 3 3h3M15 6h3a3 3 0 0 1 0 6h-3"/>
+            </svg>
+            So sánh thuật toán
+          </h3>
+          <table class="glass-table">
+            <thead>
+              <tr>
+                <th>Thuật toán</th><th>Score</th><th>P(nợ xấu)</th><th>Rủi ro</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (card of modelCards; track card.key) {
+                <tr class="clickable-row"
+                  [ngClass]="{'active-model-row': activeModel === card.key}"
+                  (click)="setActiveModel(card.key)">
+                  <td class="model-name-cell">{{ modelLabel(card.key) }}</td>
+                  <td class="score-mono"
+                    [style.color]="card.score >= 700 ? 'var(--color-low)' : card.score >= 580 ? 'var(--color-medium)' : 'var(--color-critical)'">
+                    {{ card.score }}
+                  </td>
+                  <td class="score-mono-sm">{{ (card.prob * 100).toFixed(1) }}%</td>
+                  <td><app-risk-tag-inline [level]="card.risk"></app-risk-tag-inline></td>
+                </tr>
+              }
+              <tr class="active-model-row">
+                <td class="ensemble-name-cell">Ensemble (TB)</td>
+                <td class="score-mono"
+                  [style.color]="multiResult.ensemble.score >= 700 ? 'var(--color-low)' : multiResult.ensemble.score >= 580 ? 'var(--color-medium)' : 'var(--color-critical)'">
+                  {{ multiResult.ensemble.score }}
+                </td>
+                <td class="score-mono-sm">
+                  {{ (multiResult.ensemble.prob * 100).toFixed(1) }}%
+                </td>
+                <td><app-risk-tag-inline [level]="multiResult.ensemble.risk"></app-risk-tag-inline></td>
+              </tr>
+            </tbody>
+          </table>
+
+          @if (multiResult.ensemble.voting) {
+            <div class="voting-summary">
+              <span>🔼 {{ multiResult.ensemble.voting.approved }} duyệt</span>
+              <span>🔽 {{ multiResult.ensemble.voting.rejected }} từ chối</span>
+            </div>
+          }
+        </div>
+      }
+    </div>
+
+    <!-- RIGHT: Results -->
+    <div class="right-col">
+      @if (displayScore > 0) {
+        <div class="glass-card">
+          <div class="model-buttons-container">
+            <button class="btn btn--sm" [class.btn--primary]="activeModel === 'ensemble'" [class.btn--secondary]="activeModel !== 'ensemble'"
+              (click)="setActiveModel('ensemble')">Ensemble (TB)</button>
+            @for (key of modelKeys; track key) {
+              <button class="btn btn--sm" [class.btn--primary]="activeModel === key" [class.btn--secondary]="activeModel !== key"
+                (click)="setActiveModel(key)">{{ modelLabel(key) }}</button>
+            }
+          </div>
+          <app-score-gauge [score]="displayScore" [size]="200"></app-score-gauge>
+          <div class="gauge-footer">
+            <div class="gauge-stat">
+              <div class="gauge-prob">
+                {{ (displayProb * 100).toFixed(1) }}%
+              </div>
+              <div class="gauge-stat-label">Xác suất nợ xấu</div>
+            </div>
+            <div class="gauge-divider"></div>
+            <div class="gauge-stat">
+              <app-risk-tag-inline [level]="displayRisk"></app-risk-tag-inline>
+              <div class="gauge-stat-label risk-label-margin">Mức rủi ro</div>
+            </div>
+          </div>
+        </div>
+
+        @if (displayShap && displayShap.length > 0) {
+          <div class="glass-card">
+            <div class="shap-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <h4>Yếu tố ảnh hưởng điểm (SHAP)</h4>
+            </div>
+            <p class="shap-desc">
+              Đỏ = tăng rủi ro nợ xấu (trừ điểm), Xanh = giảm rủi ro (cộng điểm).
+            </p>
+            <app-shap-bar [explanations]="displayShap"></app-shap-bar>
+          </div>
+        }
+      } @else {
+        <div class="glass-card empty-score-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" class="empty-score-icon" stroke-width="1.5">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          <p class="empty-score-text">
+            Nhấn <strong class="empty-score-highlight">Chấm điểm với AI</strong><br>
+            để chạy đồng thời:
+            Logistic Regression + XGBoost
+          </p>
+          <div class="hashtags-container">
+            @for (t of tags; track t) {
+              <span class="algo-tag">{{ t }}</span>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+</div>

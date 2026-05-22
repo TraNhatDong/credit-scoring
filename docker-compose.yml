@@ -1,0 +1,114 @@
+networks:
+  credit-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  ai_models:
+
+services:
+  # ─────────────────────────────────────────────
+  # PostgreSQL Database
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: credit-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: credit_scoring
+      POSTGRES_USER: credit_user
+      POSTGRES_PASSWORD: credit_pass_secure_2026
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credit_user -d credit_scoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - credit-network
+
+  # ─────────────────────────────────────────────
+  # AI Service (Python 3.10+ & FastAPI)
+  # ─────────────────────────────────────────────
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: credit-ai-service
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      MODEL_PATH: /app/models/
+      LOG_LEVEL: INFO
+      HOST: 0.0.0.0
+      PORT: 8001
+    volumes:
+      - ai_models:/app/models
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - credit-network
+
+  # ─────────────────────────────────────────────
+      # Core Backend (Java 21 & Spring Boot 3)
+  # ─────────────────────────────────────────────
+  core-backend:
+    build:
+      context: ./core-backend
+      dockerfile: Dockerfile
+    container_name: credit-core-backend
+    restart: unless-stopped
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/credit_scoring
+      SPRING_DATASOURCE_USERNAME: credit_user
+      SPRING_DATASOURCE_PASSWORD: credit_pass_secure_2026
+      AI_SERVICE_URL: http://ai-service:8001
+      SERVER_PORT: 8080
+      JAVA_OPTS: >-
+        -Xms512m -Xmx1024m
+        -XX:+UseG1GC
+        -XX:+HeapDumpOnOutOfMemoryError
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - credit-network
+
+  # ─────────────────────────────────────────────
+  # Frontend UI (Angular 18)
+  # ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: credit-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - core-backend
+    networks:
+      - credit-network

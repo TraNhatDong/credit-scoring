@@ -1,0 +1,95 @@
+<div>
+  <!-- Header -->
+  <div class="page-title-row">
+    <div>
+      <h2>Hồ sơ tín dụng</h2>
+      <p class="text-muted text-sm page-subtitle">Danh sách tất cả hồ sơ</p>
+    </div>
+    <div class="actions-group">
+      <select class="glass-select filter-select" [(ngModel)]="filter" (ngModelChange)="onFilterChange($event)">
+        <option value="">Tất cả trạng thái</option>
+        @for (s of statusList; track s.key) {
+          <option [value]="s.key">{{ s.label }}</option>
+        }
+      </select>
+      <button class="btn btn--secondary" (click)="fetch(page, filter)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>
+        </svg>
+        Làm mới
+      </button>
+      <a routerLink="/applications/new"><button class="btn btn--primary">+ Hồ sơ mới</button></a>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="glass-card table-card">
+    @if (loading) {
+      <div class="loading-container">
+        @for (i of skeletonRows; track i) {
+          <div class="skeleton table-row-skeleton"></div>
+        }
+      </div>
+    } @else if (apps.length === 0) {
+      <div class="empty-state">Chưa có hồ sơ nào</div>
+    } @else {
+      <table class="glass-table">
+        <thead>
+          <tr>
+            <th>Mã hồ sơ</th>
+            <th>Khách hàng</th>
+            <th>Số tiền (VND)</th>
+            <th>Mục đích</th>
+            <th>Trạng thái</th>
+            <th>Điểm</th>
+            <th>Mức rủi ro</th>
+            <th>Ngày tạo</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (app of apps; track app.id) {
+            <tr>
+              <td>
+                <a [routerLink]="['/applications', app.id]" class="app-id-link">
+                  {{ app.id.slice(0, 8) }}…
+                </a>
+              </td>
+              <td>{{ app.customer?.fullName ?? '—' }}</td>
+              <td class="amount-cell">
+                {{ app.requestedAmount.toLocaleString('vi-VN') }}
+              </td>
+              <td>{{ app.loanPurpose }}</td>
+              <td><span class="status-badge" [ngClass]="'status-badge--' + app.status">{{ statusLabel(app.status) }}</span></td>
+              <td>
+                @if (app.creditScore != null) {
+                  <span class="score-value">{{ app.creditScore }}</span>
+                } @else {
+                  <span class="score-empty">—</span>
+                }
+              </td>
+              <td>
+                @if (app.riskLevel) {
+                  <app-risk-tag [level]="app.riskLevel"></app-risk-tag>
+                } @else {
+                  <span class="score-empty">—</span>
+                }
+              </td>
+              <td class="date-cell">{{ app.createdAt | date:'dd/MM/yyyy' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+
+  <!-- Pagination -->
+  @if (totalPages > 1) {
+    <div class="pagination-container">
+      <button class="btn btn--secondary btn--sm" [disabled]="page === 0" (click)="goPage(page - 1)">← Trước</button>
+      <span class="pagination-info">
+        Trang {{ page + 1 }} / {{ totalPages }}
+      </span>
+      <button class="btn btn--secondary btn--sm" [disabled]="page >= totalPages - 1" (click)="goPage(page + 1)">Sau →</button>
+    </div>
+  }
+</div>

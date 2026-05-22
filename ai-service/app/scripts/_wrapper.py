@@ -202,7 +202,7 @@ class CreditScoringModel:
 
         # Step 8: Threshold and credit score
         prediction = (pd_calibrated >= self.threshold).astype(int)
-        scores = pd_to_credit_score(pd_calibrated)
+        scores = pd_to_credit_score(pd_calibrated, clamp_min=True)
 
         bands = []
         risk_bands = self.get_risk_bands()

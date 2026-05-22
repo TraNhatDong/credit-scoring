@@ -1,15 +1,8 @@
-"""
-run_pipeline.py — Orchestrator (pure, ~170 lines).
-
-Calls one function from each module in the correct dependency order.
-No business logic lives here.
-"""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-# ── _config — imports, logging, constants, seeds, utilities ──────────────────────
 from ._config import MODEL_VERSION, RANDOM_STATE, log
 
 from ._transform import Preprocessor

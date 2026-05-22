@@ -1,0 +1,44 @@
+.app-container {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.page-title-row {
+  margin-bottom: 28px;
+}
+.page-subtitle {
+  margin-top: 4px;
+}
+.section-card {
+  margin-bottom: 16px;
+}
+.section-title {
+  margin-bottom: 16px;
+}
+.customer-form-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.btn-create-customer {
+  align-self: flex-start;
+}
+.form-grid {
+  gap: 16px;
+}
+.action-buttons {
+  display: flex;
+  gap: 12px;
+}
+.customer-id-text {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--color-primary);
+}
+.btn-change-customer {
+  margin-left: auto;
+}
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}

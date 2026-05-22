@@ -1,0 +1,116 @@
+<div>
+  <!-- Header -->
+  <div class="header-container">
+    <button class="btn btn--secondary btn--sm" (click)="goBack()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Quay lại
+    </button>
+    <div>
+      <h2>Chi tiết hồ sơ</h2>
+      <p class="text-muted text-sm header-subtitle">
+        {{ app?.customer?.fullName }} — {{ app?.loanPurpose }}
+      </p>
+    </div>
+    @if (app) {
+      <span class="status-badge status-badge-aligned" [ngClass]="'status-badge--' + app.status">
+        {{ statusLabel(app.status) }}
+      </span>
+    }
+  </div>
+
+  @if (loading) {
+    <div class="loading-state">
+      <div class="spinner spinner--lg"></div>
+    </div>
+  } @else if (!app) {
+    <div class="glass-card not-found-state">
+      Không tìm thấy hồ sơ
+    </div>
+  } @else {
+    <div class="details-grid">
+      <!-- LEFT: Customer & Loan -->
+      <div class="left-column">
+        <div class="glass-card">
+          <h3 class="card-title">Thông tin khách hàng</h3>
+          <div class="info-grid">
+            @for (row of customerRows; track row[0]) {
+              <div>
+                <div class="text-muted text-xs info-label">{{ row[0] }}</div>
+                <div class="info-value">{{ row[1] }}</div>
+              </div>
+            }
+          </div>
+        </div>
+        <div class="glass-card">
+          <h3 class="card-title">Thông tin khoản vay</h3>
+          <div class="info-grid">
+            @for (row of loanRows; track row[0]) {
+              <div>
+                <div class="text-muted text-xs info-label">{{ row[0] }}</div>
+                <div class="info-value">{{ row[1] }}</div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Score Results -->
+      <div class="right-column">
+        @if (app.creditScore != null) {
+          <div class="glass-card">
+            <h3 class="card-title">Kết quả chấm điểm</h3>
+            <div class="score-results-grid">
+              <div class="score-box">
+                <div class="score-value-text score-primary">
+                  {{ app.creditScore }}
+                </div>
+                <div class="text-muted text-xs uppercase">Credit Score</div>
+              </div>
+              <div class="score-box">
+                <div class="score-value-text score-medium">
+                  {{ ((app.riskProbability ?? 0) * 100).toFixed(1) }}%
+                </div>
+                <div class="text-muted text-xs uppercase">Xác suất nợ xấu</div>
+              </div>
+            </div>
+            @if (app.riskLevel) {
+              <app-risk-tag [level]="app.riskLevel"></app-risk-tag>
+            }
+          </div>
+
+          @if (app.aiExplanations && app.aiExplanations.length > 0) {
+            <div class="glass-card">
+              <h4 class="shap-title">Yếu tố ảnh hưởng (SHAP)</h4>
+              @for (exp of app.aiExplanations.slice(0, 6); track exp.feature) {
+                <div class="shap-row">
+                  <span class="shap-feature">{{ featureLabel(exp.feature) }}</span>
+                  <span class="shap-contribution"
+                    [style.color]="exp.contribution >= 0 ? 'var(--color-critical)' : 'var(--color-low)'">
+                    {{ exp.contribution.toFixed(2) }}
+                  </span>
+                </div>
+              }
+            </div>
+          }
+
+          <button class="btn btn--primary" (click)="goToScoring()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            Xem chi tiết SHAP
+          </button>
+        } @else {
+          <div class="glass-card empty-score-state">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" class="empty-score-icon" stroke-width="1.5">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            <p class="empty-score-text">Chưa có kết quả chấm điểm</p>
+            <button class="btn btn--primary btn-score-now" (click)="goToScoring()">
+              Chấm điểm ngay
+            </button>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>

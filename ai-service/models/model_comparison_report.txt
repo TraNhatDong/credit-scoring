@@ -1,0 +1,220 @@
+=====================================================================================
+     CREDIT SCORING ML PIPELINE — MODEL COMPARISON REPORT
+     v4.1 Optimized | v4.1_20260508 | Production Grade | Basel II / IFRS 9
+     Generated: 2026-05-08 03:14:29
+=====================================================================================
+
+## 1. VALIDATION POLICY
+-------------------------------------------------------------------------------------
+  Split: train=70% | val_thresh=15% | Test=15%
+  Calibration: isotonic regression on OOF k-fold (k=5), sigmoid fallback if N<500
+  Optuna: k-fold CV objective only (no external val sets)
+  SHAP: stratified sampling (50%% near threshold + 50%% random)
+
+  Validation role separation:
+    train       : Optuna k-fold CV + OOF k-fold + isotonic calibration + final models
+    val_thresh  : threshold tuning + PSI-DEV + SHAP stratified sampling
+    Test        : final evaluation + PSI-Test + threshold robustness validation
+
+  Anti-leakage assertions (hash-based row signatures): PASS
+
+## 2. CLASS IMBALANCE MONITORING
+-------------------------------------------------------------------------------------
+  train bad_rate : 0.066838
+  test  bad_rate : 0.066844
+  drift          : 6e-06
+  status         : OK
+
+## 2b. CALIBRATION DIAGNOSTICS (B1 bad_rate_Q1 + B4 distribution)
+-------------------------------------------------------------------------------------
+  Q1 real bad_rate check:
+    <= 1.0% -> GOOD | 1.0-1.5% -> caution | 1.5-2.0% -> under-est | > 2.0% -> bad under-est
+
+  LR [BENCHMARK]
+    bad_rate_Q1 = 0.004017531044558071 (2738 samples) | GOOD (<= 1.0%) - Q1 PD <= 1% calibration accurate
+    PD: min=0.0010 max=0.5907 mean=0.0667 p01=0.0034 p99=0.5907
+    skew=3.048 spike=False cluster=True top_bin=24.7%
+    Score: range=[300,850] width=550
+    Tail PD≥15%: n=2324 bad_rate=0.3541308089500861
+
+  XGBoost [CHAMPION]
+    bad_rate_Q1 = 0.00587248322147651 (7152 samples) | GOOD (<= 1.0%) - Q1 PD <= 1% calibration accurate
+    PD: min=0.0010 max=0.9990 mean=0.0667 p01=0.0041 p99=0.5714
+    skew=3.130 spike=False cluster=True top_bin=24.3%
+    Score: range=[300,850] width=550
+    Tail PD≥15%: n=2915 bad_rate=0.32555746140651803
+
+  Diagnostic plots: models/diag_score_dist_lr.png | models/diag_score_dist_xgb.png
+
+## 3. FEATURE SPACES
+-------------------------------------------------------------------------------------
+  CHAMPION (XGB) : 16 raw features (no scaling, no IV filter) — best AUC by test
+  BENCHMARK (LR) : 14 IV-filtered features (IV > 0.02) + StandardScaler
+
+  IV scores (sorted desc):
+    RevolvingUtilizationOfUnsecuredLines          IV= 1.1162  — selected for LR
+    late_payments_total                           IV= 1.0545  — selected for LR
+    utilization_per_line                          IV= 0.9266  — selected for LR
+    NumberOfTimes90DaysLate                       IV= 0.8965  — selected for LR
+    NumberOfTime30-59DaysPastDueNotWorse          IV= 0.7279  — selected for LR
+    NumberOfTime60-89DaysPastDueNotWorse          IV= 0.6058  — selected for LR
+    age                                           IV= 0.2571  — selected for LR
+    MonthlyIncome                                 IV= 0.0749  — selected for LR
+    NumberOfOpenCreditLinesAndLoans               IV= 0.0727  — selected for LR
+    NumberOfDependents                            IV= 0.0376  — selected for LR
+    monthly_debt                                  IV= 0.0324  — selected for LR
+    debt_per_person                               IV= 0.0284  — selected for LR
+    DebtRatio                                     IV= 0.0256  — selected for LR
+    income_per_credit_line                        IV= 0.0238  — selected for LR
+    NumberRealEstateLoansOrLines                  IV= 0.0109  < 0.02 — dropped
+    is_income_missing                             IV= 0.0092  < 0.02 — dropped
+
+## 4. FEATURE DRIFT MONITORING
+-------------------------------------------------------------------------------------
+  KS > 0.1 or PSI > 0.1 flags a feature as drifted
+  Format: KS_val_thresh | KS_Test | PSI_val_thresh | PSI_Test
+
+    RevolvingUtilizationOfUnsecuredLines          KS=0.0030/0.0099  PSI=0.0002/0.0005
+    late_payments_total                           KS=0.0018/0.0021  PSI=0.0000/0.0000
+    utilization_per_line                          KS=0.0045/0.0102  PSI=0.0004/0.0006
+    NumberOfTimes90DaysLate                       KS=0.0020/0.0024  PSI=0.0000/0.0000
+    NumberOfTime30-59DaysPastDueNotWorse          KS=0.0009/0.0013  PSI=0.0000/0.0000
+    NumberOfTime60-89DaysPastDueNotWorse          KS=0.0011/0.0017  PSI=0.0000/0.0000
+    age                                           KS=0.0026/0.0039  PSI=0.0002/0.0003
+    MonthlyIncome                                 KS=0.0069/0.0098  PSI=0.0004/0.0006
+    NumberOfOpenCreditLinesAndLoans               KS=0.0074/0.0052  PSI=0.0006/0.0002
+    NumberOfDependents                            KS=0.0033/0.0029  PSI=0.0001/0.0002
+
+## 5. POPULATION STABILITY INDEX (PSI)
+-------------------------------------------------------------------------------------
+  PSI bins: fit from OOF_train, reuse for val_thresh + test
+  < 0.1 : stable | 0.1–0.2 : monitor | > 0.2 : recalibrate
+
+  XGBoost [CHAMPION]
+    PSI-DEV  :  0.0000 | No shift (< 0.1)
+    PSI-Test :  0.0009 | No shift (< 0.1)
+
+  Logistic Regression [CHALLENGER]
+    PSI-DEV  :  0.0000 | No shift (< 0.1)
+    PSI-Test :  0.0007 | No shift (< 0.1)
+
+
+## 6. BEST MODEL (by Test AUC)
+-------------------------------------------------------------------------------------
+  Name                               : XGBoost (Champion) [CHAMPION]
+  Test AUC                            : 0.8719
+  OOF AUC                            : 0.8647 (k=5, unbiased)
+  Accuracy  (t=0.26)            : 0.9229
+  Precision (t=0.26)           : 0.429
+  Recall    (t=0.26)               : 0.4641
+  F1        (t=0.26)                       : 0.4459
+  Optimal threshold                   : 0.26 (F1=0.4383)
+  Cost-sensitive thresh              : 0.26 (cost=3390.0)
+  Final threshold                     : 0.26 (strategy=cost)
+  Calibration method                 : isotonic
+  Threshold robustness               : opt_delta=0.09 | cost_delta=0.02
+
+  Top 5 SHAP features:
+    1. late_payments_total: 0.846349
+    2. RevolvingUtilizationOfUnsecuredLines: 0.532096
+    3. age: 0.176914
+    4. NumberOfTimes90DaysLate: 0.156260
+    5. utilization_per_line: 0.134884
+
+## 7. METRICS PER THRESHOLD (best model, Test)
+-------------------------------------------------------------------------------------
+     Threshold   Accuracy  Precision   Recall       F1
+    ----------------------------------------------------
+          0.30     0.9288     0.4640   0.4195   0.4406
+          0.40     0.9380     0.5807   0.2606   0.3598
+          0.50     0.9379     0.6052   0.2028   0.3038
+          0.60     0.9361     0.6793   0.0831   0.1481
+
+## 8. CREDIT SCORE SAMPLES (first 10 Test predictions)
+-------------------------------------------------------------------------------------
+  Scale: 300–850 (Basel II log-odds)
+  Band assignment: hybrid — PD-threshold tails (Q1/Q7) + quantile middle (Q2–Q6)
+  Basel anchors: Q1 = PD <= 1.0% | Q7 = PD >= 15% | Q2-Q6 = ~16% each
+
+  XGBoost [CHAMPION] [BEST]
+     Idx        PD   Score              Band
+    ------------------------------------------
+       0    0.0195     747                Q3
+       1    0.0153     775                Q2
+       2    0.0430     654                Q4
+       3    0.6351     300        Q7 (Worst)
+       4    0.0945     558                Q6
+       5    0.1582     491        Q7 (Worst)
+       6    0.0116     808                Q2
+       7    0.0153     775                Q2
+       8    0.2215     443        Q7 (Worst)
+       9    0.0041     850         Q1 (Best)
+
+  Band Distribution — hybrid PD-tail + quantile-middle (Band Set — 105000 samples):
+    --------------------------------------------------------------------------------
+      Band             Count     Pct     Score Range   PD Anchor (Basel)
+    --------------------------------------------------------------------------------
+      Q1 (Best)         7152   31.79%          824-850              PD<=1%
+      Q2                2804   12.46%          698-761                    
+      Q3                3174   14.11%          634-698                    
+      Q4                2740   12.18%          571-634                    
+      Q5                1721    7.65%          509-571                    
+      Q6                1902    8.45%          508-509                    
+      Q7 (Worst)        3007   13.36%          300-508             PD>=15%
+
+  Logistic Regression [CHALLENGER]
+     Idx        PD   Score              Band
+    ------------------------------------------
+       0    0.0109     815                Q2
+       1    0.0301     696                Q4
+       2    0.0064     850         Q1 (Best)
+       3    0.5907     300        Q7 (Worst)
+       4    0.1255     522                Q6
+       5    0.2906     402        Q7 (Worst)
+       6    0.0158     771                Q3
+       7    0.0064     850         Q1 (Best)
+       8    0.1255     522                Q6
+       9    0.0064     850         Q1 (Best)
+
+  Band Distribution — hybrid PD-tail + quantile-middle (Band Set — 105000 samples):
+    --------------------------------------------------------------------------------
+      Band             Count     Pct     Score Range   PD Anchor (Basel)
+    --------------------------------------------------------------------------------
+      Q1 (Best)         2738   12.17%          850-850              PD<=1%
+      Q2                4519   20.08%          713-782                    
+      Q3                3850   17.11%          645-713                    
+      Q4                3723   16.55%          576-645                    
+      Q5                2944   13.08%          509-576                    
+      Q6                2402   10.68%          508-509                    
+      Q7 (Worst)        2324   10.33%          300-508             PD>=15%
+
+## 9. CHAMPION vs CHALLENGER COMPARISON
+--------------------------------------------------------------------------------
+    Model                            Type          Test AUC   OOF AUC     Cost      Calib  N Features
+    --------------------------------------------------------------------------------------------------
+    XGBoost (Champion)               [CHAMPION]      0.8719    0.8647   3390.0   isotonic          16 [BEST]
+    Logistic Regression (Benchmark)  [CHALLENGER]    0.8596    0.8501   3535.0   isotonic          14
+
+  CHAMPION (XGB)  : all raw features — best AUC, Optuna-tuned, strong regularization
+  BENCHMARK (LR)  : IV-filtered + scaled — transparent, explainable, regulatory-friendly
+
+## 10. SHAP FEATURE IMPORTANCE (Top 5 per Model)
+--------------------------------------------------------------------------------
+  SHAP eval: stratified sampling (50%% near optimal threshold + 50%% random)
+  XGBoost [CHAMPION] — SHAP: OK
+    1. late_payments_total: 0.846349
+    2. RevolvingUtilizationOfUnsecuredLines: 0.532096
+    3. age: 0.176914
+    4. NumberOfTimes90DaysLate: 0.156260
+    5. utilization_per_line: 0.134884
+
+  Logistic Regression [CHALLENGER] — SHAP: OK
+    1. RevolvingUtilizationOfUnsecuredLines (scaled): 0.781822
+    2. age (scaled): 0.255395
+    3. NumberOfTime30-59DaysPastDueNotWorse (scaled): 0.220134
+    4. NumberOfOpenCreditLinesAndLoans (scaled): 0.202555
+    5. late_payments_total (scaled): 0.178106
+
+================================================================================
+  END OF REPORT
+================================================================================

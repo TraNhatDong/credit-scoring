@@ -4,7 +4,7 @@ All inputs are strictly validated using Pydantic.
 """
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ErrorCode(str, Enum):
@@ -22,64 +22,74 @@ class ErrorCode(str, Enum):
 class ScoringRequest(BaseModel):
     """
     Input schema for a single credit scoring prediction.
-    All fields use GMSC (Give Me Some Credit) dataset column names.
+    All fields use snake_case names for compatibility with Java WebClient JSON serialization.
 
-    Validated ranges are based on real-world banking criteria and dataset statistics.
+    Feature names map to GMSC (Give Me Some Credit) dataset columns:
+      RevolvingUtilizationOfUnsecuredLines → revolving_utilization_of_unsecured_lines
+      NumberOfTime30_59DaysPastDueNotWorse → number_of_time30_59days_past_due_not_worse
+      (etc.)
     """
 
-    RevolvingUtilizationOfUnsecuredLines: float = Field(
+    application_id: str | None = Field(
+        default=None,
+        alias="applicationId",
+        description="Unique application identifier (optional, echoed in response)",
+    )
+    revolving_utilization_of_unsecured_lines: float = Field(
         ..., ge=0.0,
         description="Total balance on credit cards and personal lines of credit / sum of credit limits",
     )
     age: int = Field(..., ge=0, le=120, description="Borrower age in years")
-    NumberOfTime30_59DaysPastDueNotWorse: int = Field(
+    number_of_time30_59days_past_due_not_worse: int = Field(
         ...,
+        ge=0,
         description="Number of times borrower has been 30-59 days past due but no worse in last 2 years",
     )
-    DebtRatio: float = Field(
+    debt_ratio: float = Field(
         ..., ge=0.0,
         description="Monthly debt payments / monthly gross income",
     )
-    MonthlyIncome: float = Field(..., gt=0, description="Monthly gross income")
-    NumberOfOpenCreditLinesAndLoans: int = Field(
+    monthly_income: float = Field(..., gt=0, description="Monthly gross income")
+    number_of_open_credit_lines_and_loans: int = Field(
         ..., ge=0,
         description="Number of open credit lines and loans",
     )
-    NumberOfTimes90DaysLate: int = Field(
+    number_of_times90days_late: int = Field(
         ..., ge=0,
         description="Number of times borrower has been 90+ days past due",
     )
-    NumberRealEstateLoansOrLines: int = Field(
+    number_real_estate_loans_or_lines: int = Field(
         ..., ge=0,
         description="Number of mortgage and real estate loans including home equity lines of credit",
     )
-    NumberOfTime60_89DaysPastDueNotWorse: int = Field(
+    number_of_time60_89days_past_due_not_worse: int = Field(
         ...,
+        ge=0,
         description="Number of times borrower has been 60-89 days past due but no worse in last 2 years",
     )
-    NumberOfDependents: float = Field(
+    number_of_dependents: float = Field(
         ..., ge=0,
         description="Number of dependents in family excluding themselves",
     )
 
-    @field_validator("MonthlyIncome")
-    @classmethod
-    def income_must_be_positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("MonthlyIncome must be strictly positive")
-        return round(v, 2)
+    @model_validator(mode="after")
+    def income_must_be_positive(self) -> "ScoringRequest":
+        if self.monthly_income <= 0:
+            raise ValueError("monthly_income must be strictly positive")
+        return self
 
     @model_validator(mode="after")
     def cross_field_validation(self) -> "ScoringRequest":
-        if self.NumberOfTime60_89DaysPastDueNotWorse > self.NumberOfTime30_59DaysPastDueNotWorse:
+        if self.number_of_time60_89days_past_due_not_worse > self.number_of_time30_59days_past_due_not_worse:
             raise ValueError(
-                "NumberOfTime60_89DaysPastDueNotWorse cannot exceed NumberOfTime30_59DaysPastDueNotWorse"
+                "number_of_time60_89days_past_due_not_worse cannot exceed number_of_time30_59days_past_due_not_worse"
             )
-        if self.NumberOfTimes90DaysLate > self.NumberOfTime30_59DaysPastDueNotWorse:
+        if self.number_of_times90days_late > self.number_of_time30_59days_past_due_not_worse:
             raise ValueError(
-                "NumberOfTimes90DaysLate cannot exceed NumberOfTime30_59DaysPastDueNotWorse"
+                "number_of_times90days_late cannot exceed number_of_time30_59days_past_due_not_worse"
             )
         return self
+
 
     model_config = {
         "json_schema_extra": {
@@ -144,6 +154,10 @@ class ScoringResponse(BaseModel):
     Full scoring response including the score, probability, risk level,
     and per-feature SHAP explanations.
     """
+    application_id: str | None = Field(
+        default=None,
+        description="Application ID echoed from request (for correlation)",
+    )
     credit_score:       int               = Field(..., ge=300, le=850,
                                                    description="Credit score (FICO-like range 300–850)")
     risk_probability:   float             = Field(...,
